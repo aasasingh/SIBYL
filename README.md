@@ -12,7 +12,7 @@ Full design: [SIBYL-build-prompt.md](SIBYL-build-prompt.md).
 | Phase | Scope | State |
 |---|---|---|
 | 0 | Skeleton: config, venue clients, kill switch, logging | ✅ done |
-| 1 | Ingestion & cost model | 🟡 fee model + Kalshi book normaliser done; execution/capital models next |
+| 1 | Ingestion & cost model | ✅ fees, depth-walk execution, APY/capital, §5.2 parity property tests |
 | 2 | Historical store & resolution ledger | ⬜ |
 | 3 | Calibration engine | ⬜ |
 | 4 | Semantic identity graph | ⬜ |
@@ -41,7 +41,7 @@ production (mainnet chain, prod Kalshi env).
 ## Commands
 
 ```bash
-uv run pytest            # offline suite (49 tests)
+uv run pytest            # offline suite (78 tests)
 uv run pytest -m live    # live connectivity smoke tests
 uv run mypy              # strict, src + tests
 uv run ruff check .
