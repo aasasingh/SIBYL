@@ -28,3 +28,6 @@ KILL_SWITCH
 # OS / editor
 .DS_Store
 Thumbs.db
+
+# Local Claude Code settings
+.claude/settings.local.json

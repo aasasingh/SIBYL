@@ -152,6 +152,28 @@ class KalshiClient:
     async def market(self, ticker: str) -> dict[str, Any]:
         return await self._get(f"/markets/{ticker}")
 
+    async def events(self, **params: Any) -> dict[str, Any]:
+        """GET /events — supports status, limit, cursor, with_nested_markets.
+        Events carry the category (domain source) and series_ticker that
+        markets themselves lack."""
+        return await self._get("/events", params=params or None)
+
+    async def candlesticks(
+        self,
+        series_ticker: str,
+        ticker: str,
+        *,
+        start_ts: int,
+        end_ts: int,
+        period_interval: int = 60,
+    ) -> dict[str, Any]:
+        """GET candlesticks for one market. `period_interval` in minutes
+        (1 / 60 / 1440). Dollar fields arrive as strings (fp migration)."""
+        return await self._get(
+            f"/series/{series_ticker}/markets/{ticker}/candlesticks",
+            params={"start_ts": start_ts, "end_ts": end_ts, "period_interval": period_interval},
+        )
+
     async def balance(self) -> dict[str, Any]:
         if not self.authenticated:
             raise RuntimeError("balance requires authentication")

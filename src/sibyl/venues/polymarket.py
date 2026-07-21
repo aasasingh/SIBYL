@@ -48,8 +48,10 @@ class PolymarketReadClient:
         # We stay far under: these are research reads, not the hot path.
         self._gamma_limiter = AsyncLimiter(max_rate=25, time_period=1)
         self._clob_limiter = AsyncLimiter(max_rate=50, time_period=1)
+        self._data_limiter = AsyncLimiter(max_rate=20, time_period=1)
         self._gamma = httpx.AsyncClient(base_url=GAMMA_BASE, http2=True, timeout=15.0)
         self._clob = httpx.AsyncClient(base_url=CLOB_BASE, http2=True, timeout=15.0)
+        self._data = httpx.AsyncClient(base_url=DATA_BASE, http2=True, timeout=15.0)
 
     async def __aenter__(self) -> Self:
         return self
@@ -62,6 +64,7 @@ class PolymarketReadClient:
     ) -> None:
         await self._gamma.aclose()
         await self._clob.aclose()
+        await self._data.aclose()
 
     @retry(
         retry=retry_if_exception(_is_retryable),
@@ -82,6 +85,14 @@ class PolymarketReadClient:
         return response.json(parse_float=str)  # prices must never become floats
 
     async def events(self, **params: Any) -> list[dict[str, Any]]:
+        payload = await self._get(self._gamma, self._gamma_limiter, "/events", params or None)
+        if not isinstance(payload, list):
+            raise TypeError(f"expected list from /events, got {type(payload).__name__}")
+        return payload
+
+    async def gamma_events(self, **params: Any) -> list[dict[str, Any]]:
+        """gamma /events — tags (domain source), negRiskAugmented flag, and
+        fully-populated nested markets. Preferred discovery surface."""
         payload = await self._get(self._gamma, self._gamma_limiter, "/events", params or None)
         if not isinstance(payload, list):
             raise TypeError(f"expected list from /events, got {type(payload).__name__}")
@@ -128,6 +139,39 @@ class PolymarketReadClient:
                 raise TypeError(f"{field}: price/size must be strings, got {entry!r}")
             levels.append(Level(price=Decimal(price), size=Decimal(size)))
         return levels
+
+    async def prices_history(
+        self, token_id: str, *, start_ts: int, end_ts: int, fidelity: int = 60
+    ) -> list[dict[str, Any]]:
+        """CLOB price history for one token. Empty for resolved markets — the
+        CLOB prunes history at resolution; use the data-api tape for those."""
+        payload = await self._get(
+            self._clob,
+            self._clob_limiter,
+            "/prices-history",
+            {"market": token_id, "startTs": start_ts, "endTs": end_ts, "fidelity": fidelity},
+        )
+        if not isinstance(payload, dict):
+            raise TypeError(f"expected object from /prices-history, got {type(payload).__name__}")
+        history = payload.get("history", [])
+        if not isinstance(history, list):
+            raise TypeError("prices-history 'history' is not a list")
+        return history
+
+    async def trades(
+        self, condition_id: str, *, limit: int = 500, offset: int = 0
+    ) -> list[dict[str, Any]]:
+        """data-api trade tape for a market (survives resolution). Trades
+        carry price/size as strings plus the traded outcome label."""
+        payload = await self._get(
+            self._data,
+            self._data_limiter,
+            "/trades",
+            {"market": condition_id, "limit": limit, "offset": offset},
+        )
+        if not isinstance(payload, list):
+            raise TypeError(f"expected list from /trades, got {type(payload).__name__}")
+        return payload
 
     async def midpoint(self, token_id: str) -> dict[str, Any]:
         payload = await self._get(
