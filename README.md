@@ -13,7 +13,7 @@ Full design: [SIBYL-build-prompt.md](SIBYL-build-prompt.md).
 |---|---|---|
 | 0 | Skeleton: config, venue clients, kill switch, logging | ✅ done |
 | 1 | Ingestion & cost model | ✅ fees, depth-walk execution, APY/capital, §5.2 parity property tests |
-| 2 | Historical store & resolution ledger | ⬜ |
+| 2 | Historical store & resolution ledger | ✅ ledger + backfill + calibration query; full-depth backfill pending Kalshi prod key |
 | 3 | Calibration engine | ⬜ |
 | 4 | Semantic identity graph | ⬜ |
 | 5 | Alpha, sizing, paper trading | ⬜ |
