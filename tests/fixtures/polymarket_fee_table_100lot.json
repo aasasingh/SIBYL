@@ -1,0 +1,13 @@
+{
+  "source": "https://docs.polymarket.us/fees",
+  "transcribed": "2026-07-21",
+  "effective": "2026-07-01T00:00:00-04:00",
+  "note": "Official published rows for a 100-contract lot (Polymarket US). The docs page publishes sample price points, not all 99; extend this file verbatim from the docs if/when more rows are published. Never regenerate these values from sibyl's own fee formula.",
+  "rows": [
+    {"price": "0.10", "taker_pays": "0.54", "maker_receives": "0.11"},
+    {"price": "0.25", "taker_pays": "1.12", "maker_receives": "0.23"},
+    {"price": "0.50", "taker_pays": "1.50", "maker_receives": "0.31"},
+    {"price": "0.75", "taker_pays": "1.12", "maker_receives": "0.23"},
+    {"price": "0.90", "taker_pays": "0.54", "maker_receives": "0.11"}
+  ]
+}
