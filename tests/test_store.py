@@ -286,6 +286,88 @@ class TestResolutionQueries:
         assert ("A", 1) in by_market and ("B", 0) in by_market
         assert counts == [("kalshi", "politics", 2, 2)]
 
+    def test_horizon_anchors_on_actual_resolution_not_placeholder_close(
+        self, tmp_path: Path
+    ) -> None:
+        """Regression guard for the worst bug found in Phase 3.
+
+        Gamma's `endDate` is usually a far-future placeholder (88% of real
+        markets settle before it, median 112 days early). Anchoring the
+        horizon on it inflated every horizon by months and swept all rows
+        into `1mo+`, silently destroying the per-horizon model. The horizon
+        must be measured to LEAST(close_time, settled_time).
+        """
+        ledger = Ledger(tmp_path)
+        settled = NOW  # actually resolved here
+        placeholder_close = NOW + timedelta(days=200)  # bogus far-future endDate
+        ledger.write_markets(
+            [
+                MarketRecord(
+                    venue=Venue.KALSHI,
+                    market_id="EARLY",
+                    title="resolved long before its nominal close",
+                    domain=Domain.POLITICS,
+                    close_time=placeholder_close,
+                    settled_time=settled,
+                    resolution="yes",
+                )
+            ]
+        )
+        # A quote 3 days before actual resolution.
+        ledger.write_prices(
+            [
+                PriceRecord(
+                    venue=Venue.KALSHI,
+                    market_id="EARLY",
+                    ts=settled - timedelta(days=3),
+                    price=Decimal("0.80"),
+                    source="kalshi_candle",
+                )
+            ]
+        )
+        with ledger.connect() as con:
+            rows = calibration_rows(con).fetchall()
+        assert len(rows) == 1
+        horizon_days = float(rows[0][6])
+        assert horizon_days == pytest.approx(3.0, abs=0.01), (
+            f"horizon {horizon_days:.1f}d — anchored on the placeholder close "
+            "instead of actual resolution"
+        )
+        assert horizon_bucket(horizon_days) == "2d-1w"
+
+    def test_rows_after_actual_resolution_are_excluded(self, tmp_path: Path) -> None:
+        """Post-resolution prices converge to 0/1 and would leak the label."""
+        ledger = Ledger(tmp_path)
+        ledger.write_markets(
+            [
+                MarketRecord(
+                    venue=Venue.KALSHI,
+                    market_id="M",
+                    title="m",
+                    domain=Domain.POLITICS,
+                    close_time=NOW + timedelta(days=200),
+                    settled_time=NOW,
+                    resolution="yes",
+                )
+            ]
+        )
+        ledger.write_prices(
+            [
+                _px("M", 2, "0.70"),  # before resolution: keep
+                PriceRecord(
+                    venue=Venue.KALSHI,
+                    market_id="M",
+                    ts=NOW + timedelta(hours=5),  # after resolution: drop
+                    price=Decimal("1.00"),
+                    source="kalshi_candle",
+                ),
+            ]
+        )
+        with ledger.connect() as con:
+            rows = calibration_rows(con).fetchall()
+        assert len(rows) == 1
+        assert float(rows[0][4]) == pytest.approx(0.70)
+
     def test_horizon_buckets(self) -> None:
         assert horizon_bucket(0.02) == "0-1h"
         assert horizon_bucket(0.5) == "12-24h"
