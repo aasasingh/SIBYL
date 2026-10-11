@@ -8,16 +8,19 @@ Rounding conventions differ and matter:
   - Polymarket US: banker's rounding (half-to-even) to the cent, on the total.
   - Kalshi: rounds UP to the next cent, on the total.
 
-The `polymarket_*` functions implement Polymarket US ONLY (verified against
-https://docs.polymarket.us/fees, schedule effective 2026-07-01). Polymarket
-International runs a different schedule entirely — per-category taker
-coefficients, no maker rebate, 5-decimal rounding — and is deliberately
-unimplemented; see `polymarket_intl_taker_fee`.
+Two Polymarket venues, two incompatible schedules — never cross them:
+  - `polymarket_*`      -> Polymarket US. Taker 0.06, per-fill maker rebate
+    0.0125, banker's rounding to the cent. (docs.polymarket.us/fees,
+    effective 2026-07-01, verified 2026-07-21.)
+  - `polymarket_intl_*` -> Polymarket International. Per-category taker
+    coefficients (0 to 0.07), makers never charged, 5-decimal rounding.
+    (docs.polymarket.com/polymarket-learn/trading/fees, verified 2026-10-11.)
 """
 
 from __future__ import annotations
 
 from decimal import ROUND_CEILING, ROUND_HALF_EVEN, Decimal
+from enum import StrEnum
 
 from sibyl.venues.normalise import parse_price
 
@@ -125,14 +128,229 @@ def kalshi_maker_fee(
     return Decimal("0.00")
 
 
-def polymarket_intl_taker_fee(price: object, contracts: object) -> Decimal:
-    """Polymarket International fees are a different schedule (per-category
-    coefficients, zero maker rebate). Unimplemented on purpose: silently
-    applying US fees to INTL books would manufacture phantom edge."""
-    raise NotImplementedError(
-        "Polymarket International fee schedule not implemented; "
-        "do not price INTL markets with the US fee curve"
-    )
+class IntlFeeCategory(StrEnum):
+    """Polymarket International's own fee taxonomy.
+
+    Deliberately separate from `semantic.classify.Domain`: this one decides
+    what you pay, that one decides how prices are recalibrated, and they do
+    not agree. The sharpest divergence is GEOPOLITICS — fee-free on INTL, but
+    a `politics` market for calibration purposes.
+    """
+
+    CRYPTO = "crypto"
+    SPORTS = "sports"
+    FINANCE = "finance"
+    POLITICS = "politics"
+    MENTIONS = "mentions"
+    TECH = "tech"
+    ECONOMICS = "economics"
+    CULTURE = "culture"
+    WEATHER = "weather"
+    GEOPOLITICS = "geopolitics"
+    OTHER = "other"
+
+
+# Verified against https://docs.polymarket.com/polymarket-learn/trading/fees
+# on 2026-10-11. Each coefficient is confirmed by the venue's own published
+# 100-share peak: coef * 100 * 0.25 == peak fee at p=0.50.
+INTL_TAKER_COEF: dict[IntlFeeCategory, Decimal] = {
+    IntlFeeCategory.CRYPTO: Decimal("0.07"),  # peak $1.75
+    IntlFeeCategory.SPORTS: Decimal("0.05"),  # peak $1.25
+    IntlFeeCategory.ECONOMICS: Decimal("0.05"),
+    IntlFeeCategory.CULTURE: Decimal("0.05"),
+    IntlFeeCategory.WEATHER: Decimal("0.05"),
+    IntlFeeCategory.OTHER: Decimal("0.05"),
+    IntlFeeCategory.FINANCE: Decimal("0.04"),  # peak $1.00
+    IntlFeeCategory.POLITICS: Decimal("0.04"),
+    IntlFeeCategory.MENTIONS: Decimal("0.04"),
+    IntlFeeCategory.TECH: Decimal("0.04"),
+    IntlFeeCategory.GEOPOLITICS: Decimal("0"),  # fee-free
+}
+
+# Maker rebate pool share by category — the fraction of taker fees collected
+# that is redistributed to makers, paid DAILY and pro-rata. This is NOT a
+# per-fill credit (contrast Polymarket US), so it must never be subtracted
+# from an effective cost: you cannot know your share at decision time.
+INTL_MAKER_REBATE_SHARE: dict[IntlFeeCategory, Decimal] = {
+    IntlFeeCategory.SPORTS: Decimal("0.15"),
+    IntlFeeCategory.CRYPTO: Decimal("0.20"),
+    IntlFeeCategory.FINANCE: Decimal("0.25"),
+    IntlFeeCategory.POLITICS: Decimal("0.25"),
+    IntlFeeCategory.ECONOMICS: Decimal("0.25"),
+    IntlFeeCategory.CULTURE: Decimal("0.25"),
+    IntlFeeCategory.WEATHER: Decimal("0.25"),
+    IntlFeeCategory.MENTIONS: Decimal("0.25"),
+    IntlFeeCategory.TECH: Decimal("0.25"),
+    IntlFeeCategory.OTHER: Decimal("0.25"),
+    IntlFeeCategory.GEOPOLITICS: Decimal("0"),  # no fees collected, no pool
+}
+
+# INTL rounds to 5 decimals; anything below the minimum charge rounds to zero.
+INTL_QUANTUM = Decimal("0.00001")
+
+# Tag keywords -> INTL fee category, highest-priority first. Geopolitics is
+# checked before politics because the fee difference is total (0 vs 0.04).
+_INTL_TAG_BUCKETS: tuple[tuple[IntlFeeCategory, frozenset[str]], ...] = (
+    (
+        IntlFeeCategory.GEOPOLITICS,
+        frozenset(
+            {
+                "geopolitics",
+                "world affairs",
+                "middle east",
+                "ukraine",
+                "nato",
+                "israel",
+                "russia",
+                "iran",
+                "war",
+            }
+        ),
+    ),
+    (
+        IntlFeeCategory.CRYPTO,
+        frozenset(
+            {
+                "crypto",
+                "bitcoin",
+                "ethereum",
+                "solana",
+                "defi",
+                "nft",
+                "stablecoin",
+                "airdrops",
+                # Token-launch markets: classed crypto (0.07) rather than
+                # finance (0.04). Both the likelier reading and the
+                # conservative one — understating a fee invents edge.
+                "fdv",
+                "pre-market",
+                "token sales",
+                "public sales",
+                "ethgas",
+            }
+        ),
+    ),
+    (
+        IntlFeeCategory.SPORTS,
+        frozenset(
+            {
+                "sports",
+                "nba",
+                "nfl",
+                "mlb",
+                "nhl",
+                "soccer",
+                "football",
+                "basketball",
+                "baseball",
+                "hockey",
+                "tennis",
+                "golf",
+                "ufc",
+                "mma",
+                "boxing",
+                "cricket",
+                "f1",
+                "olympics",
+                "esports",
+                "chess",
+            }
+        ),
+    ),
+    (IntlFeeCategory.WEATHER, frozenset({"weather", "climate", "hurricane", "temperature"})),
+    (IntlFeeCategory.MENTIONS, frozenset({"mentions", "mention markets"})),
+    (IntlFeeCategory.TECH, frozenset({"tech", "ai", "technology", "openai", "spacex"})),
+    (
+        IntlFeeCategory.ECONOMICS,
+        frozenset({"economy", "economics", "inflation", "fed", "fed rates", "macro", "jobs"}),
+    ),
+    (IntlFeeCategory.FINANCE, frozenset({"finance", "stocks", "earnings", "ipo", "business"})),
+    (
+        IntlFeeCategory.POLITICS,
+        frozenset(
+            {
+                "politics",
+                "elections",
+                "election",
+                "trump",
+                "congress",
+                "senate",
+                "white house",
+                "supreme court",
+            }
+        ),
+    ),
+    (
+        IntlFeeCategory.CULTURE,
+        frozenset(
+            {
+                "pop culture",
+                "culture",
+                "entertainment",
+                "movies",
+                "music",
+                "awards",
+                "oscars",
+                "grammys",
+                "celebrities",
+                "tv",
+                "gaming",
+            }
+        ),
+    ),
+)
+
+
+def intl_fee_category(tags: list[str] | None) -> IntlFeeCategory:
+    """Resolve a market's INTL fee category from its gamma tags.
+
+    Falls back to OTHER (0.05) — the conservative choice, since under-pricing
+    the fee is what manufactures phantom edge.
+    """
+    if not tags:
+        return IntlFeeCategory.OTHER
+    lowered = {t.casefold() for t in tags}
+    for category, keywords in _INTL_TAG_BUCKETS:
+        if lowered & keywords:
+            return category
+    return IntlFeeCategory.OTHER
+
+
+def polymarket_intl_taker_fee(
+    price: object,
+    contracts: object,
+    *,
+    category: IntlFeeCategory = IntlFeeCategory.OTHER,
+) -> Decimal:
+    """Polymarket International taker fee: coef(category) * C * p * (1-p).
+
+    Rounded to 5 decimals; results below the 0.00001 minimum charge are zero.
+    Makers are never charged (see `polymarket_intl_maker_fee`).
+    """
+    p, c = _validate(price, contracts)
+    raw = _quadratic(INTL_TAKER_COEF[category], p, c)
+    fee = raw.quantize(INTL_QUANTUM, rounding=ROUND_HALF_EVEN)
+    return Decimal("0") if fee < INTL_QUANTUM else fee
+
+
+def polymarket_intl_maker_fee(price: object, contracts: object) -> Decimal:
+    """Zero. Makers are never charged on INTL.
+
+    Note what this does NOT model: makers receive a share of the taker-fee
+    pool, but it is paid daily and pro-rata across all makers, so it is not
+    knowable per fill. Treat it as an unmodelled upside, never as a cost
+    reduction — see `INTL_MAKER_REBATE_SHARE`.
+    """
+    _validate(price, contracts)
+    return Decimal("0")
+
+
+def polymarket_intl_effective_taker_cost(
+    price: object, *, category: IntlFeeCategory = IntlFeeCategory.OTHER
+) -> Decimal:
+    """Per-contract all-in cost of taking YES at `price` on INTL, unrounded."""
+    p, _ = _validate(price, 1)
+    return p + INTL_TAKER_COEF[category] * p * (ONE - p)
 
 
 def polymarket_effective_taker_cost(price: object) -> Decimal:

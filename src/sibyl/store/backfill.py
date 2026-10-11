@@ -285,6 +285,102 @@ def tape_to_hourly_bars(
     ]
 
 
+async def backfill_polymarket_markets(
+    client: PolymarketReadClient,
+    ledger: Ledger,
+    *,
+    months: int = 6,
+    max_pages: int = 20,
+    page_size: int = 500,
+) -> int:
+    """Pull resolved binary markets from gamma into the ledger.
+
+    Flushes each page as it lands: bounded memory and a killed run keeps
+    everything it already fetched.
+    """
+    min_close = datetime.now(UTC) - timedelta(days=30 * months)
+    written = 0
+    cursor: str | None = None
+    for page in range(max_pages):
+        # Keyset paging: offset paging 422s past ~2100 rows, and gamma's own
+        # error points at /events/keyset for depth. Page size is capped
+        # server-side (observed 100 for limit=500), which is fine here.
+        events, cursor = await client.gamma_events_keyset(
+            cursor=cursor,
+            closed="true",
+            limit=page_size,
+            end_date_min=min_close.strftime("%Y-%m-%dT%H:%M:%SZ"),
+            order="endDate",
+            ascending="false",
+        )
+        if not events:
+            break
+        page_records: list[MarketRecord] = []
+        for event in events:
+            page_records.extend(parse_gamma_event(event))
+        written += ledger.write_markets(page_records)
+        if page % 10 == 0 or not cursor:
+            log.info(
+                "poly.backfill.page",
+                page=page,
+                events=len(events),
+                parsed=len(page_records),
+                new_total=written,
+            )
+        if not cursor:
+            break
+    return written
+
+
+async def backfill_polymarket_tape(
+    client: PolymarketReadClient,
+    ledger: Ledger,
+    *,
+    tape_markets: int,
+    tape_pages_per_market: int = 6,
+    flush_every: int = 25,
+) -> dict[str, int]:
+    """Rebuild price paths for resolved markets from the data-api trade tape.
+
+    Candidates come from the LEDGER (not just this run's fetch) in a stable
+    pseudo-random order, so the training sample spreads across time and
+    domain instead of clustering on the most recently resolved events, and so
+    a resumed run continues rather than re-walking the same head of the list.
+    """
+    candidates = ledger.tape_candidates(Venue.POLYMARKET_INTL, limit=tape_markets)
+    buffer: list[PriceRecord] = []
+    rows_written = 0
+    done = 0
+    failed = 0
+
+    def flush() -> None:
+        nonlocal buffer, rows_written
+        if buffer:
+            rows_written += ledger.write_prices(buffer)
+            buffer = []
+
+    for market_id, condition_id in candidates:
+        tape: list[dict[str, Any]] = []
+        try:
+            for page in range(tape_pages_per_market):
+                batch = await client.trades(condition_id, limit=500, offset=page * 500)
+                tape.extend(batch)
+                if len(batch) < 500:
+                    break
+        except Exception as exc:
+            failed += 1
+            log.warning("poly.tape.market_failed", market_id=market_id, error=str(exc))
+            continue
+        buffer.extend(tape_to_hourly_bars(tape, venue=Venue.POLYMARKET_INTL, market_id=market_id))
+        done += 1
+        if done % flush_every == 0:
+            flush()
+            log.info("poly.tape.progress", markets=done, rows=rows_written, failed=failed)
+    flush()
+    log.info("poly.tape.done", markets=done, rows=rows_written, failed=failed)
+    return {"markets": done, "price_rows": rows_written, "failed": failed}
+
+
 async def backfill_polymarket(
     client: PolymarketReadClient,
     ledger: Ledger,
@@ -295,48 +391,18 @@ async def backfill_polymarket(
     tape_markets: int = 0,
     tape_pages_per_market: int = 6,
 ) -> dict[str, int]:
-    """Pull resolved binary markets from gamma, price paths from the tape."""
-    min_close = datetime.now(UTC) - timedelta(days=30 * months)
-    all_records: list[MarketRecord] = []
-    offset = 0
-    for page in range(max_pages):
-        # /events carries tags + negRiskAugmented + nested markets. gamma
-        # silently caps page size (observed: 100 for limit=500), so advance
-        # by what actually came back, not by the requested size.
-        events = await client.gamma_events(
-            closed="true",
-            limit=page_size,
-            offset=offset,
-            end_date_min=min_close.strftime("%Y-%m-%dT%H:%M:%SZ"),
-            order="endDate",
-            ascending="false",
-        )
-        if not events:
-            break
-        offset += len(events)
-        kept = 0
-        for event in events:
-            parsed = parse_gamma_event(event)
-            all_records.extend(parsed)
-            kept += len(parsed)
-        log.info("poly.backfill.page", page=page, events=len(events), kept=kept)
-    markets_written = ledger.write_markets(all_records)
-
-    prices_written = 0
+    """Markets then price paths. See the two functions above."""
+    markets_written = await backfill_polymarket_markets(
+        client, ledger, months=months, max_pages=max_pages, page_size=page_size
+    )
+    result = {"markets": markets_written, "price_rows": 0, "failed": 0}
     if tape_markets > 0:
-        already = ledger.priced_market_ids(source="poly_tape")
-        todo = [
-            r for r in all_records if r.series_id and (r.venue.value, r.market_id) not in already
-        ][:tape_markets]
-        for record in todo:
-            assert record.series_id is not None
-            tape: list[dict[str, Any]] = []
-            for page in range(tape_pages_per_market):
-                batch = await client.trades(record.series_id, limit=500, offset=page * 500)
-                tape.extend(batch)
-                if len(batch) < 500:
-                    break
-            bars = tape_to_hourly_bars(tape, venue=record.venue, market_id=record.market_id)
-            prices_written += ledger.write_prices(bars)
-        log.info("poly.backfill.tape", markets=len(todo), rows=prices_written)
-    return {"markets": markets_written, "price_rows": prices_written}
+        tape_result = await backfill_polymarket_tape(
+            client,
+            ledger,
+            tape_markets=tape_markets,
+            tape_pages_per_market=tape_pages_per_market,
+        )
+        result["price_rows"] = tape_result["price_rows"]
+        result["failed"] = tape_result["failed"]
+    return result

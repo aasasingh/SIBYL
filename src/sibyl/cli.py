@@ -89,6 +89,54 @@ async def _backfill(args: argparse.Namespace) -> int:
     return 0
 
 
+def _calibrate(args: argparse.Namespace) -> int:
+    from sibyl.calibration.dataset import load_rows
+    from sibyl.calibration.report import build_report
+
+    ledger = Ledger(args.data_dir)
+    rows = load_rows(
+        ledger,
+        max_horizon_days=args.max_horizon_days,
+        exclude_domains=tuple(args.exclude_domains or ()),
+    )
+    if len(rows) == 0:
+        log.error("calibrate.no_data", hint="run `sibyl backfill --price-markets N` first")
+        return 1
+    _cells, _mu, _tau, _folds, lines = build_report(rows, n_boot=args.n_boot, n_folds=args.n_folds)
+    text = "\n".join(lines)
+    sys.stdout.write(text + "\n")
+    if args.out is not None:
+        args.out.parent.mkdir(parents=True, exist_ok=True)
+        args.out.write_text(text + "\n", encoding="utf-8")
+        log.info("calibrate.written", path=str(args.out))
+    return 0
+
+
+def _lag(args: argparse.Namespace) -> int:
+    from sibyl.store.resolutions import early_resolution_rate, resolution_lag
+
+    with Ledger(args.data_dir).connect() as con:
+        for venue, n, p50, p90, p99, worst in resolution_lag(con):
+            log.info(
+                "store.resolution_lag_days",
+                venue=venue,
+                n=n,
+                median=round(p50, 3),
+                p90=round(p90, 3),
+                p99=round(p99, 3),
+                max=round(worst, 2),
+            )
+        for venue, n, early in early_resolution_rate(con):
+            log.info("store.early_resolution", venue=venue, n=n, fraction=round(early, 4))
+    return 0
+
+
+def _compact(args: argparse.Namespace) -> int:
+    merged = Ledger(args.data_dir).compact(min_parts=args.min_parts)
+    log.info("store.compacted", **merged)
+    return 0
+
+
 def _store_summary(args: argparse.Namespace) -> int:
     ledger = Ledger(args.data_dir)
     for venue, domain, resolution, n_markets, n_prices in ledger.summary():
@@ -134,6 +182,21 @@ def main() -> None:
     store = sub.add_parser("store", help="summarise the ledger")
     store.add_argument("--data-dir", type=Path, default=DEFAULT_DATA_DIR)
 
+    compact = sub.add_parser("compact", help="merge Parquet parts into one file per table")
+    compact.add_argument("--data-dir", type=Path, default=DEFAULT_DATA_DIR)
+    compact.add_argument("--min-parts", type=int, default=50)
+
+    calibrate = sub.add_parser("calibrate", help="fit recalibration slopes and report honestly")
+    calibrate.add_argument("--data-dir", type=Path, default=DEFAULT_DATA_DIR)
+    calibrate.add_argument("--n-boot", type=int, default=400, help="clustered bootstrap draws")
+    calibrate.add_argument("--n-folds", type=int, default=4, help="walk-forward folds")
+    calibrate.add_argument("--max-horizon-days", type=float, default=400.0)
+    calibrate.add_argument("--exclude-domains", nargs="*", default=[])
+    calibrate.add_argument("--out", type=Path, default=None, help="also write the report here")
+
+    lag = sub.add_parser("lag", help="measured settlement lag (basis for capital buffers)")
+    lag.add_argument("--data-dir", type=Path, default=DEFAULT_DATA_DIR)
+
     args = parser.parse_args()
     configure_logging(json_output=args.json)
     if args.command == "status":
@@ -142,6 +205,12 @@ def main() -> None:
         sys.exit(asyncio.run(_backfill(args)))
     elif args.command == "store":
         sys.exit(_store_summary(args))
+    elif args.command == "compact":
+        sys.exit(_compact(args))
+    elif args.command == "calibrate":
+        sys.exit(_calibrate(args))
+    elif args.command == "lag":
+        sys.exit(_lag(args))
 
 
 if __name__ == "__main__":

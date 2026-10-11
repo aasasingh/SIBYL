@@ -22,12 +22,25 @@ class KalshiSettings(BaseModel):
     env: Literal["demo", "prod"] = "demo"
     api_key_id: str | None = None
     private_key_path: Path | None = None
-    enabled: bool = True
+    # Kalshi does not serve Canadian residents, so the operator of this
+    # deployment cannot trade or pull authenticated history there. Demo reads
+    # still work and the client stays tested; flip this on only from a
+    # jurisdiction where Kalshi is actually available.
+    enabled: bool = False
+    disabled_reason: str = "operator jurisdiction (Canada): Kalshi unavailable"
 
 
 class PolymarketSettings(BaseModel):
-    # US and International are legally distinct venues; exactly one is active.
-    platform: Literal["us", "intl"] = "us"
+    """Exactly one Polymarket platform is active: US and International are
+    legally distinct venues with separate books, fees and eligibility.
+
+    Default is `intl`, because Polymarket US is a CFTC-regulated US exchange
+    and this deployment's operator is not US-resident. Note that INTL is
+    itself geo-restricted — see `research/jurisdiction.md`; Phase 6 (live)
+    must not be enabled without confirming current provincial eligibility.
+    """
+
+    platform: Literal["us", "intl"] = "intl"
     chain_id: int = 80002  # Polygon Amoy testnet until Phase 6; 137 = mainnet
     enabled: bool = True
 
@@ -90,7 +103,7 @@ def resolve_eligibility(settings: Settings) -> VenueEligibility:
         enabled.add(Venue.KALSHI)
         reasons[Venue.KALSHI] = f"enabled via config (env={settings.kalshi.env})"
     else:
-        reasons[Venue.KALSHI] = "disabled via config"
+        reasons[Venue.KALSHI] = settings.kalshi.disabled_reason
 
     active = settings.polymarket.venue
     inactive = Venue.POLYMARKET_INTL if active is Venue.POLYMARKET_US else Venue.POLYMARKET_US

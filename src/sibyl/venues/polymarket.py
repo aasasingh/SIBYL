@@ -92,11 +92,34 @@ class PolymarketReadClient:
 
     async def gamma_events(self, **params: Any) -> list[dict[str, Any]]:
         """gamma /events — tags (domain source), negRiskAugmented flag, and
-        fully-populated nested markets. Preferred discovery surface."""
+        fully-populated nested markets.
+
+        Offset paging dies with 422 ("offset too large") past ~2100 rows; use
+        `gamma_events_keyset` for anything deeper.
+        """
         payload = await self._get(self._gamma, self._gamma_limiter, "/events", params or None)
         if not isinstance(payload, list):
             raise TypeError(f"expected list from /events, got {type(payload).__name__}")
         return payload
+
+    async def gamma_events_keyset(
+        self, *, cursor: str | None = None, **params: Any
+    ) -> tuple[list[dict[str, Any]], str | None]:
+        """gamma /events/keyset — cursor paging with no depth ceiling.
+
+        Returns (events, next_cursor). Same nested shape as /events.
+        """
+        query: dict[str, Any] = dict(params)
+        if cursor:
+            query["cursor"] = cursor
+        payload = await self._get(self._gamma, self._gamma_limiter, "/events/keyset", query)
+        if not isinstance(payload, dict):
+            raise TypeError(f"expected object from /events/keyset, got {type(payload).__name__}")
+        events = payload.get("events") or []
+        if not isinstance(events, list):
+            raise TypeError("keyset 'events' is not a list")
+        next_cursor = payload.get("next_cursor")
+        return events, str(next_cursor) if next_cursor else None
 
     async def markets(self, **params: Any) -> list[dict[str, Any]]:
         payload = await self._get(self._gamma, self._gamma_limiter, "/markets", params or None)

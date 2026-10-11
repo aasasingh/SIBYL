@@ -89,13 +89,40 @@ _POLYMARKET_TAG_BUCKETS: tuple[tuple[Domain, frozenset[str]], ...] = (
                 "ukraine",
                 "china",
                 "nato",
+                # Found in the `other` bucket on real data: country/region and
+                # conflict tags are political markets.
+                "world",
+                "global elections",
+                "iran",
+                "israel",
+                "russia",
+                "netherlands",
+                "dutch election",
+                "war",
+                "ceasefire",
             }
         ),
     ),
     (
         Domain.CRYPTO,
         frozenset(
-            {"crypto", "bitcoin", "ethereum", "solana", "defi", "nft", "stablecoin", "airdrops"}
+            {
+                "crypto",
+                "bitcoin",
+                "ethereum",
+                "solana",
+                "defi",
+                "nft",
+                "stablecoin",
+                "airdrops",
+                # Token-launch markets, found in the `other` bucket on real
+                # data: FDV / pre-market / token-sale events are crypto.
+                "fdv",
+                "pre-market",
+                "token sales",
+                "public sales",
+                "ethgas",
+            }
         ),
     ),
     (
@@ -126,6 +153,9 @@ _POLYMARKET_TAG_BUCKETS: tuple[tuple[Domain, frozenset[str]], ...] = (
         frozenset(
             {
                 "pop culture",
+                # Bare "culture" was the single largest miss on real data
+                # (107 markets landing in `other`).
+                "culture",
                 "entertainment",
                 "movies",
                 "music",
@@ -134,10 +164,24 @@ _POLYMARKET_TAG_BUCKETS: tuple[tuple[Domain, frozenset[str]], ...] = (
                 "grammys",
                 "celebrities",
                 "tv",
+                "reality tv",
                 "gaming",
+                "youtube",
+                "mrbeast",
+                "pokemon",
+                # Polymarket "mentions" markets (will X say Y) behave as
+                # culture/attention markets, not politics.
+                "mentions",
             }
         ),
     ),
+)
+
+# Tags that carry no subject information — site metadata, ordinal labels, and
+# scheduling flags. Listed explicitly so they are never mistaken for a missing
+# mapping when auditing the `other` bucket.
+UNINFORMATIVE_TAGS: frozenset[str] = frozenset(
+    {"hide from new", "recurring", "second", "internet", "all", "weekly", "daily", "monthly"}
 )
 
 

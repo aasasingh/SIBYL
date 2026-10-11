@@ -214,6 +214,57 @@ class Ledger:
             rows = con.execute(query, params).fetchall()
         return {(v, m) for v, m in rows}
 
+    def tape_candidates(self, venue: Venue, *, limit: int) -> list[tuple[str, str]]:
+        """(market_id, condition_id) for resolved markets that still need a
+        price path, in a stable pseudo-random order.
+
+        `hash(market_id)` ordering is deterministic, so a resumed backfill
+        continues through the same sequence, and the sample is spread across
+        resolution dates and domains rather than being the most-recent head
+        of the list — a time-clustered training sample would make the
+        walk-forward split meaningless.
+        """
+        with self.connect() as con:
+            rows = con.execute(
+                """
+                SELECT m.market_id, m.series_id
+                FROM markets m
+                LEFT JOIN (
+                    SELECT DISTINCT venue, market_id FROM prices WHERE source = 'poly_tape'
+                ) p USING (venue, market_id)
+                WHERE m.venue = ?
+                  AND m.resolution IN ('yes', 'no')
+                  AND m.series_id IS NOT NULL
+                  AND m.close_time IS NOT NULL
+                  AND p.market_id IS NULL
+                ORDER BY hash(m.market_id)
+                LIMIT ?
+                """,
+                [venue.value, limit],
+            ).fetchall()
+        return [(str(r[0]), str(r[1])) for r in rows]
+
+    def compact(self, min_parts: int = 50) -> dict[str, int]:
+        """Rewrite each table's parts into one file. Many small Parquet files
+        slow every later read; a long backfill produces hundreds."""
+        merged: dict[str, int] = {}
+        for name, directory, schema in (
+            ("markets", self.markets_dir, MARKETS_SCHEMA),
+            ("prices", self.prices_dir, PRICES_SCHEMA),
+        ):
+            parts = sorted(directory.glob("*.parquet"))
+            if len(parts) < min_parts:
+                merged[name] = 0
+                continue
+            table = pq.read_table(directory, schema=schema)
+            tmp = directory / f"_compact-{uuid.uuid4().hex[:8]}.parquet.tmp"
+            pq.write_table(table, tmp)
+            for part in parts:
+                part.unlink()
+            tmp.rename(directory / f"part-compacted-{datetime.now(UTC):%Y%m%dT%H%M%S}.parquet")
+            merged[name] = len(parts)
+        return merged
+
     def summary(self) -> list[tuple[str, str, str | None, int, int]]:
         """(venue, domain, resolution, n_markets, n_price_rows) rollup."""
         with self.connect() as con:
