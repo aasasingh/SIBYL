@@ -27,6 +27,7 @@ from dataclasses import dataclass, field
 
 import numpy as np
 import numpy.typing as npt
+from scipy.special import expit as _scipy_expit
 
 # Prices are clipped before the logit so that a 0 or 1 quote cannot produce an
 # infinite feature. 1e-4 keeps 1c and 99c quotes intact while bounding the tail.
@@ -44,7 +45,10 @@ def logit(p: FloatArray | float) -> FloatArray:
 
 
 def expit(x: FloatArray | float) -> FloatArray:
-    return 1.0 / (1.0 + np.exp(-np.asarray(x, dtype=np.float64)))
+    """Numerically stable logistic. scipy's implementation avoids the
+    overflow a naive 1/(1+exp(-x)) hits on the large |x| that degenerate
+    cells produce."""
+    return np.asarray(_scipy_expit(np.asarray(x, dtype=np.float64)), dtype=np.float64)
 
 
 @dataclass(frozen=True)
@@ -73,17 +77,56 @@ class CellFit:
         """Slope to actually use: the pooled one when pooling was applied."""
         return self.pooled_slope if self.pooled_slope is not None else self.slope
 
+    # Above this shrinkage, a pooled slope is essentially the population mean
+    # rather than anything this cell's own data said.
+    MAX_SHRINKAGE_FOR_CELL_SIGNAL = 0.80
+
     @property
     def tradeable(self) -> bool:
-        """A cell is tradeable only if its CI excludes b = 1 (spec §6).
+        """A cell is tradeable only if it has a demonstrated CELL-SPECIFIC
+        edge (spec §6). Three conditions, all necessary:
 
-        No CI, failed fit, or an interval spanning 1.0 all mean the same
-        thing operationally: we have no demonstrated edge in this cell.
+        1. The fit converged and has a market-clustered CI.
+        2. That CI excludes b = 1.
+        3. The slope we would actually trade is still driven by this cell's
+           own data, and points the same way as the interval.
+
+        Condition 3 exists because of a real incoherence found in the first
+        full run: `sports/6-12h` was flagged tradeable on a CI of
+        [1.437, 9.246] while carrying shrinkage 0.99, meaning the slope the
+        system would trade had been pulled to 1.18 — the population mean. The
+        interval that justified the trade described an estimate we were not
+        using. Trading the population mean is a *global* claim and must be
+        judged on the population slope's own interval (`FitReport.global_ci`),
+        not borrowed from a cell whose data said almost nothing.
         """
         if not self.converged or self.slope_ci is None:
             return False
         low, high = self.slope_ci
-        return low > 1.0 or high < 1.0
+        if not (low > 1.0 or high < 1.0):
+            return False
+        if self.shrinkage is not None:
+            if self.shrinkage > self.MAX_SHRINKAGE_FOR_CELL_SIGNAL:
+                return False
+            # Pooling must not have moved the estimate across 1.0.
+            pooled = self.pooled_slope
+            if pooled is not None and (pooled > 1.0) != (low > 1.0):
+                return False
+        return True
+
+    @property
+    def gating_note(self) -> str:
+        """Why this cell is not tradeable, for the report."""
+        if not self.converged:
+            return self.note or "fit did not converge"
+        if self.slope_ci is None:
+            return "no clustered CI"
+        low, high = self.slope_ci
+        if not (low > 1.0 or high < 1.0):
+            return "CI straddles b=1"
+        if self.shrinkage is not None and self.shrinkage > self.MAX_SHRINKAGE_FOR_CELL_SIGNAL:
+            return f"shrinkage {self.shrinkage:.2f}: slope is the population mean, not this cell"
+        return ""
 
     @property
     def brier_improvement(self) -> float:

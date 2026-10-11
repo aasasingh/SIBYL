@@ -14,7 +14,7 @@ Full design: [SIBYL-build-prompt.md](SIBYL-build-prompt.md).
 | 0 | Skeleton: config, venue clients, kill switch, logging | ✅ |
 | 1 | Ingestion & cost model (fees, depth walk, APY, parity) | ✅ |
 | 2 | Historical store & resolution ledger | ✅ |
-| 3 | Calibration engine | ✅ engine + walk-forward + honest report |
+| 3 | Calibration engine | ✅ built, run, and **hypothesis killed** — [findings](research/phase3-findings.md) |
 | 4 | Semantic identity graph | ⬜ needs an Anthropic API key |
 | 5 | Alpha, sizing, paper trading | ⬜ **the finish line** |
 | 6 | Live trading | 🚫 out of scope — see below |
@@ -34,6 +34,22 @@ tells you it has no edge is the thing worth building.
 One consequence worth stating plainly: cross-venue arbitrage (§2.3.2), the
 spec's best-documented inefficiency, is **unexecutable** here. The parity
 conditions and semantic layer stay as tested research instruments.
+
+### Phase 3 result: no tradeable recalibration edge
+
+Fitted on 159,182 hourly rows across 1,977 resolved markets. The population
+slope looks like the published research (mu = 1.179, CI [1.066, 1.292]), but
+**walk-forward out-of-sample improvement is -0.0066, positive in only 1 of 4
+folds** — the recalibration does not beat the raw price. Of 47 testable
+cells, 5 clear the tradeability bar against ~2.4 expected by chance.
+
+So the system declines to trade the signal, which is the designed behaviour.
+Write-up, caveats and falsifiable next steps:
+[research/phase3-findings.md](research/phase3-findings.md).
+
+The most useful by-product: a mid-range "+15pp inefficiency" in the first run
+turned out to be row-counting. Counted per market it collapses to ≈0 —
+Polymarket is well calibrated between 0.35 and 0.65.
 
 ## What it does today
 

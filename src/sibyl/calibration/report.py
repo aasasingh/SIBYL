@@ -6,7 +6,7 @@ from __future__ import annotations
 import numpy as np
 
 from sibyl.calibration.fit import CellFit, fit_cell
-from sibyl.calibration.hierarchical import partial_pool
+from sibyl.calibration.hierarchical import partial_pool, population_slope_ci
 from sibyl.calibration.walkforward import FoldResult, Rows, reliability_table, walk_forward
 from sibyl.store.resolutions import HORIZON_BUCKETS
 
@@ -23,9 +23,10 @@ def build_report(
     """Fit all cells, pool, walk forward. Returns (cells, mu, tau, folds, lines)."""
     cells = [fit_cell(cell, n_boot=n_boot) for cell in rows.cells()]
     pooled, mu, tau = partial_pool(cells)
+    mu_ci = population_slope_ci(cells)
     pooled.sort(key=_sort_key)
     folds = walk_forward(rows, n_folds=n_folds, n_boot=max(100, n_boot // 2))
-    return pooled, mu, tau, folds, render(rows, pooled, mu, tau, folds)
+    return pooled, mu, tau, folds, render(rows, pooled, mu, tau, folds, mu_ci)
 
 
 def render(
@@ -34,14 +35,20 @@ def render(
     mu: float,
     tau: float,
     folds: list[FoldResult],
+    mu_ci: tuple[float, float] | None = None,
 ) -> list[str]:
     n_markets = int(np.unique(rows.market_id).size)
+    mu_text = f"mu={mu:.4f}"
+    if mu_ci is not None:
+        excludes_one = mu_ci[0] > 1.0 or mu_ci[1] < 1.0
+        mu_text += f" CI [{mu_ci[0]:.4f}, {mu_ci[1]:.4f}]"
+        mu_text += " (excludes 1)" if excludes_one else " (STRADDLES 1 — no global edge)"
     lines: list[str] = [
         "=" * 100,
         "SIBYL CALIBRATION REPORT",
         "=" * 100,
         f"rows={len(rows)}  markets={n_markets}  cells={len(cells)}",
-        f"population slope mu={mu:.4f}  between-cell sd tau={tau:.4f}",
+        f"population slope {mu_text}  between-cell sd tau={tau:.4f}",
         "",
         "PER-CELL FITS  (b>1 = prices compressed toward 0.5; CI is market-clustered)",
         "-" * 100,
@@ -49,10 +56,16 @@ def render(
     lines.extend("  " + c.describe() for c in cells)
 
     tradeable = [c for c in cells if c.tradeable]
+    tested = sum(1 for c in cells if c.slope_ci is not None)
+    expected_false = 0.05 * tested
     lines += [
         "",
-        f"TRADEABLE CELLS: {len(tradeable)} of {len(cells)} "
-        "(CI excludes b=1; everything else has no demonstrated edge)",
+        f"TRADEABLE CELLS: {len(tradeable)} of {len(cells)}",
+        "  Requires all three: the clustered CI excludes b=1; the slope actually traded is",
+        f"  still this cell's own (shrinkage <= {CellFit.MAX_SHRINKAGE_FOR_CELL_SIGNAL:.2f});"
+        " and pooling did not move it across 1.0.",
+        f"  MULTIPLE TESTING: {tested} cells carry an interval, so at 95% confidence about"
+        f" {expected_false:.1f} would clear the bar by chance alone.",
         "-" * 100,
     ]
     if tradeable:
@@ -62,11 +75,29 @@ def render(
                 if cell.effective_slope > 1
                 else "prices OVER-EXTENDED (fade the extremes)"
             )
+            shrink = f" shrink={cell.shrinkage:.2f}" if cell.shrinkage is not None else ""
             lines.append(
-                f"  {cell.domain}/{cell.horizon}: b={cell.effective_slope:.3f} -> {direction}"
+                f"  {cell.domain}/{cell.horizon}: b={cell.effective_slope:.3f}{shrink}"
+                f" -> {direction}"
             )
     else:
-        lines.append("  none. No cell's slope interval excludes 1.0 on this data.")
+        lines.append("  none. No cell shows a demonstrated cell-specific edge on this data.")
+
+    gated = [(c, c.gating_note) for c in cells if not c.tradeable and c.gating_note]
+    shrunk_out = [c for c, note in gated if note.startswith("shrinkage")]
+    if shrunk_out:
+        lines += [
+            "",
+            f"  REJECTED FOR BORROWED SIGNAL ({len(shrunk_out)}): interval excluded 1, but the",
+            "  slope these would trade is the population mean, not their own data. Judge",
+            "  these on the population CI above, not per-cell.",
+        ]
+        lines.extend(
+            f"    {c.domain}/{c.horizon}: own b={c.slope:.3f} -> traded "
+            f"{c.effective_slope:.3f} (shrink {c.shrinkage:.2f})"
+            for c in shrunk_out
+            if c.shrinkage is not None
+        )
 
     lines += ["", "WALK-FORWARD OUT-OF-SAMPLE (expanding window, split on market close)", "-" * 100]
     if not folds:

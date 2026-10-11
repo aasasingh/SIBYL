@@ -1,0 +1,126 @@
+====================================================================================================
+SIBYL CALIBRATION REPORT
+====================================================================================================
+rows=159182  markets=1977  cells=63
+population slope mu=1.1786 CI [1.0655, 1.2917] (excludes 1)  between-cell sd tau=0.1631
+
+PER-CELL FITS  (b>1 = prices compressed toward 0.5; CI is market-clustered)
+----------------------------------------------------------------------------------------------------
+  crypto         0-1h     n=71     m=71    b=nan no CI pooled=1.179 (shrink 1.00) dBrier=+nan no signal [fit did not converge]
+  crypto         1-3h     n=265    m=177   b=nan no CI pooled=1.179 (shrink 1.00) dBrier=+nan no signal [fit did not converge]
+  crypto         3-6h     n=405    m=184   b=1.953 [1.532, 5.665] pooled=1.188 (shrink 0.99) dBrier=+0.00052 no signal
+  crypto         6-12h    n=780    m=207   b=1.988 [1.557, 3.609] pooled=1.230 (shrink 0.94) dBrier=+0.00269 no signal
+  crypto         12-24h   n=1565   m=234   b=1.645 [1.284, 2.502] pooled=1.285 (shrink 0.77) dBrier=+0.00205 TRADEABLE
+  crypto         24-48h   n=2800   m=242   b=1.031 [0.814, 1.425] pooled=1.109 (shrink 0.53) dBrier=+0.00086 no signal
+  crypto         2d-1w    n=7178   m=236   b=0.846 [0.656, 1.200] pooled=0.995 (shrink 0.45) dBrier=+0.00157 no signal
+  crypto         1w-1mo   n=10024  m=189   b=0.690 [0.517, 0.967] pooled=0.861 (shrink 0.35) dBrier=+0.01094 TRADEABLE
+  crypto         1mo+     n=9724   m=98    b=0.950 [0.554, 1.737] pooled=1.129 (shrink 0.79) dBrier=+0.02021 no signal
+  entertainment  0-1h     n=28     m=28    b=nan no CI pooled=1.179 (shrink 1.00) dBrier=+nan no signal [only 28 rows]
+  entertainment  1-3h     n=110    m=83    b=nan no CI pooled=1.179 (shrink 1.00) dBrier=+nan no signal [fit did not converge]
+  entertainment  3-6h     n=125    m=69    b=2.089 [1.614, 5.631] pooled=1.195 (shrink 0.98) dBrier=+0.00254 no signal
+  entertainment  6-12h    n=154    m=64    b=1.415 [0.965, 6.981] pooled=1.181 (shrink 0.99) dBrier=+0.00242 no signal
+  entertainment  12-24h   n=219    m=63    b=1.268 [0.857, 3.289] pooled=1.180 (shrink 0.99) dBrier=+0.00538 no signal
+  entertainment  24-48h   n=366    m=66    b=1.332 [0.908, 2.553] pooled=1.197 (shrink 0.88) dBrier=+0.00541 no signal
+  entertainment  2d-1w    n=1171   m=87    b=1.312 [0.782, 2.387] pooled=1.194 (shrink 0.88) dBrier=+0.00497 no signal
+  entertainment  1w-1mo   n=1795   m=80    b=0.792 [0.344, 2.255] pooled=1.139 (shrink 0.90) dBrier=+0.00593 no signal
+  entertainment  1mo+     n=910    m=38    b=0.773 [0.282, 1.802] pooled=1.117 (shrink 0.85) dBrier=+0.02356 no signal
+  finance        0-1h     n=40     m=40    b=nan no CI pooled=1.179 (shrink 1.00) dBrier=+nan no signal [only 40 rows]
+  finance        1-3h     n=171    m=114   b=nan no CI pooled=1.179 (shrink 1.00) dBrier=+nan no signal [fit did not converge]
+  finance        3-6h     n=208    m=108   b=1.988 [1.357, 3.214] pooled=1.256 (shrink 0.90) dBrier=+0.01904 no signal
+  finance        6-12h    n=400    m=128   b=1.175 [0.898, 3.592] pooled=1.178 (shrink 0.96) dBrier=+0.00688 no signal
+  finance        12-24h   n=638    m=138   b=1.311 [0.946, 3.512] pooled=1.186 (shrink 0.95) dBrier=+0.00849 no signal
+  finance        24-48h   n=998    m=138   b=1.226 [0.941, 2.519] pooled=1.185 (shrink 0.87) dBrier=+0.00520 no signal
+  finance        2d-1w    n=3276   m=147   b=1.266 [0.894, 2.278] pooled=1.194 (shrink 0.83) dBrier=+0.00670 no signal
+  finance        1w-1mo   n=7629   m=95    b=1.836 [1.403, 2.736] pooled=1.285 (shrink 0.84) dBrier=+0.00975 no signal
+  finance        1mo+     n=12301  m=56    b=1.693 [1.151, 4.112] pooled=1.203 (shrink 0.95) dBrier=+0.00852 no signal
+  other          0-1h     n=16     m=16    b=nan no CI pooled=1.179 (shrink 1.00) dBrier=+nan no signal [only 16 rows]
+  other          1-3h     n=62     m=42    b=nan no CI pooled=1.179 (shrink 1.00) dBrier=+nan no signal [fit did not converge]
+  other          3-6h     n=60     m=32    b=1.576 [1.141, 1.806] pooled=1.363 (shrink 0.53) dBrier=+0.00616 TRADEABLE
+  other          6-12h    n=93     m=25    b=1.796 [1.290, 4.047] pooled=1.203 (shrink 0.96) dBrier=+0.00292 no signal
+  other          12-24h   n=129    m=29    b=1.458 [1.036, 5.045] pooled=1.188 (shrink 0.97) dBrier=+0.02365 no signal
+  other          24-48h   n=258    m=44    b=1.875 [1.315, 6.778] pooled=1.190 (shrink 0.98) dBrier=+0.04221 no signal
+  other          2d-1w    n=628    m=40    b=2.719 [1.685, 5.379] pooled=1.211 (shrink 0.98) dBrier=+0.01858 no signal
+  other          1w-1mo   n=669    m=30    b=2.593 [1.542, 5.763] pooled=1.203 (shrink 0.98) dBrier=+0.03499 no signal
+  other          1mo+     n=1474   m=22    b=0.839 [0.428, 3.312] pooled=1.165 (shrink 0.96) dBrier=+0.02571 no signal
+  politics       0-1h     n=171    m=171   b=nan no CI pooled=1.179 (shrink 1.00) dBrier=+nan no signal [fit did not converge]
+  politics       1-3h     n=449    m=294   b=1.252 [0.956, 2.190] pooled=1.185 (shrink 0.91) dBrier=+0.00102 no signal
+  politics       3-6h     n=607    m=282   b=1.466 [1.022, 3.685] pooled=1.181 (shrink 0.99) dBrier=+0.00449 no signal
+  politics       6-12h    n=1016   m=305   b=1.196 [0.859, 2.339] pooled=1.181 (shrink 0.85) dBrier=+0.00248 no signal
+  politics       12-24h   n=1748   m=314   b=1.188 [0.872, 2.009] pooled=1.180 (shrink 0.79) dBrier=+0.00428 no signal
+  politics       24-48h   n=3217   m=323   b=1.052 [0.809, 1.658] pooled=1.134 (shrink 0.65) dBrier=+0.00425 no signal
+  politics       2d-1w    n=11005  m=373   b=1.066 [0.748, 1.826] pooled=1.150 (shrink 0.75) dBrier=+0.00434 no signal
+  politics       1w-1mo   n=20817  m=342   b=1.065 [0.823, 1.513] pooled=1.126 (shrink 0.54) dBrier=+0.00173 no signal
+  politics       1mo+     n=24447  m=210   b=1.544 [1.105, 2.343] pooled=1.253 (shrink 0.80) dBrier=+0.01615 TRADEABLE
+  sports         0-1h     n=72     m=72    b=nan no CI pooled=1.179 (shrink 1.00) dBrier=+nan no signal [fit did not converge]
+  sports         1-3h     n=374    m=314   b=1.462 [1.118, 1.662] pooled=1.334 (shrink 0.45) dBrier=+0.00026 TRADEABLE
+  sports         3-6h     n=299    m=189   b=1.167 [0.887, 2.373] pooled=1.177 (shrink 0.85) dBrier=+0.00045 no signal
+  sports         6-12h    n=383    m=186   b=2.252 [1.437, 9.246] pooled=1.184 (shrink 0.99) dBrier=+0.00290 no signal
+  sports         12-24h   n=597    m=225   b=1.040 [0.793, 1.849] pooled=1.142 (shrink 0.74) dBrier=+0.00012 no signal
+  sports         24-48h   n=1043   m=314   b=0.939 [0.712, 1.812] pooled=1.119 (shrink 0.75) dBrier=+0.00002 no signal
+  sports         2d-1w    n=3608   m=526   b=0.843 [0.591, 1.857] pooled=1.097 (shrink 0.76) dBrier=+0.00191 no signal
+  sports         1w-1mo   n=9266   m=558   b=1.204 [0.932, 1.792] pooled=1.187 (shrink 0.66) dBrier=-0.00032 no signal
+  sports         1mo+     n=11604  m=283   b=1.266 [0.836, 1.931] pooled=1.201 (shrink 0.74) dBrier=+0.00005 no signal
+  weather        0-1h     n=2      m=2     b=nan no CI pooled=1.179 (shrink 1.00) dBrier=+nan no signal [only 2 rows]
+  weather        1-3h     n=8      m=8     b=nan no CI pooled=1.179 (shrink 1.00) dBrier=+nan no signal [only 8 rows]
+  weather        3-6h     n=9      m=8     b=nan no CI pooled=1.179 (shrink 1.00) dBrier=+nan no signal [only 9 rows]
+  weather        6-12h    n=6      m=5     b=nan no CI pooled=1.179 (shrink 1.00) dBrier=+nan no signal [only 6 rows]
+  weather        12-24h   n=13     m=7     b=nan no CI pooled=1.179 (shrink 1.00) dBrier=+nan no signal [only 13 rows]
+  weather        24-48h   n=51     m=13    b=nan no CI pooled=1.179 (shrink 1.00) dBrier=+nan no signal [fit did not converge]
+  weather        2d-1w    n=201    m=21    b=0.446 [0.142, 2.294] pooled=1.129 (shrink 0.93) dBrier=+0.02103 no signal
+  weather        1w-1mo   n=584    m=25    b=2.026 [0.144, 2.992] pooled=1.219 (shrink 0.95) dBrier=+0.00963 no signal
+  weather        1mo+     n=845    m=19    b=3.122 [0.445, 5.076] pooled=1.205 (shrink 0.99) dBrier=+0.04608 no signal
+
+TRADEABLE CELLS: 5 of 63
+  Requires all three: the clustered CI excludes b=1; the slope actually traded is
+  still this cell's own (shrinkage <= 0.80); and pooling did not move it across 1.0.
+  MULTIPLE TESTING: 47 cells carry an interval, so at 95% confidence about 2.4 would clear the bar by chance alone.
+----------------------------------------------------------------------------------------------------
+  other/3-6h: b=1.363 shrink=0.53 -> prices COMPRESSED (favourites underpriced)
+  sports/1-3h: b=1.334 shrink=0.45 -> prices COMPRESSED (favourites underpriced)
+  crypto/12-24h: b=1.285 shrink=0.77 -> prices COMPRESSED (favourites underpriced)
+  politics/1mo+: b=1.253 shrink=0.80 -> prices COMPRESSED (favourites underpriced)
+  crypto/1w-1mo: b=0.861 shrink=0.35 -> prices OVER-EXTENDED (fade the extremes)
+
+  REJECTED FOR BORROWED SIGNAL (13): interval excluded 1, but the
+  slope these would trade is the population mean, not their own data. Judge
+  these on the population CI above, not per-cell.
+    crypto/3-6h: own b=1.953 -> traded 1.188 (shrink 0.99)
+    crypto/6-12h: own b=1.988 -> traded 1.230 (shrink 0.94)
+    entertainment/3-6h: own b=2.089 -> traded 1.195 (shrink 0.98)
+    finance/3-6h: own b=1.988 -> traded 1.256 (shrink 0.90)
+    finance/1w-1mo: own b=1.836 -> traded 1.285 (shrink 0.84)
+    finance/1mo+: own b=1.693 -> traded 1.203 (shrink 0.95)
+    other/6-12h: own b=1.796 -> traded 1.203 (shrink 0.96)
+    other/12-24h: own b=1.458 -> traded 1.188 (shrink 0.97)
+    other/24-48h: own b=1.875 -> traded 1.190 (shrink 0.98)
+    other/2d-1w: own b=2.719 -> traded 1.211 (shrink 0.98)
+    other/1w-1mo: own b=2.593 -> traded 1.203 (shrink 0.98)
+    politics/3-6h: own b=1.466 -> traded 1.181 (shrink 0.99)
+    sports/6-12h: own b=2.252 -> traded 1.184 (shrink 0.99)
+
+WALK-FORWARD OUT-OF-SAMPLE (expanding window, split on market close)
+----------------------------------------------------------------------------------------------------
+  fold  train_mkts  test_mkts  brier_model  brier_raw   improvement 
+  0     790         296        0.090575     0.072392    -0.018183   
+  1     1086        296        0.103149     0.086196    -0.016953   
+  2     1382        296        0.118917     0.112881    -0.006035   
+  3     1678        296        0.095546     0.110225    +0.014678   
+
+  mean improvement over raw price: -0.006623 (1/4 folds positive)
+  VERDICT: NO out-of-sample improvement — the raw price is not reliably beaten
+
+RELIABILITY (raw quoted price vs realised frequency)
+Read the MARKET-level columns: rows within a market are one bet counted many times.
+----------------------------------------------------------------------------------------------------
+  bin    mean_price  obs_row   gap_row   obs_mkt   gap_mkt   rows     markets 
+  0.05   0.0207      0.0152    -0.0056   0.0440    +0.0233   81629    1613    
+  0.15   0.1418      0.1704    +0.0287   0.1659    +0.0241   13760    639     
+  0.25   0.2475      0.3060    +0.0585   0.2664    +0.0190   10609    518     
+  0.35   0.3474      0.4520    +0.1046   0.3406    -0.0067   6283     411     
+  0.45   0.4431      0.6000    +0.1569   0.4293    -0.0138   5985     396     
+  0.55   0.5501      0.7060    +0.1559   0.5511    +0.0010   6797     401     
+  0.65   0.6559      0.7421    +0.0862   0.6311    -0.0248   6521     347     
+  0.75   0.7475      0.8186    +0.0711   0.7246    -0.0229   5710     334     
+  0.85   0.8509      0.8780    +0.0271   0.7848    -0.0661   6461     381     
+  0.95   0.9606      0.9677    +0.0071   0.8496    -0.1110   15427    492     
+====================================================================================================

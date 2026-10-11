@@ -7,6 +7,7 @@ bug produces plausible-looking numbers that are silently wrong.
 
 from __future__ import annotations
 
+from dataclasses import replace
 from decimal import Decimal
 
 import numpy as np
@@ -23,7 +24,7 @@ from sibyl.calibration.fit import (
     fit_logistic,
     logit,
 )
-from sibyl.calibration.hierarchical import partial_pool
+from sibyl.calibration.hierarchical import partial_pool, population_slope_ci
 from sibyl.calibration.walkforward import Rows, reliability_table, walk_forward
 
 
@@ -159,6 +160,63 @@ class TestPartialPooling:
         thin_p, thick_p = by_domain["weather"], by_domain["politics"]
         if thin_p.shrinkage is not None and thick_p.shrinkage is not None:
             assert thin_p.shrinkage > thick_p.shrinkage
+
+    def test_heavily_shrunk_cell_is_not_tradeable_on_a_borrowed_interval(self) -> None:
+        """Regression guard for a real incoherence in the first full run.
+
+        A cell can have a CI excluding 1 while shrinkage pulls the slope it
+        would actually trade back to the population mean. The interval then
+        describes an estimate the system is not using, so the cell must not
+        count as a cell-specific edge.
+        """
+        wide = CellFit(
+            domain="sports",
+            horizon="6-12h",
+            n_rows=383,
+            n_markets=186,
+            slope=2.252,
+            intercept=0.0,
+            slope_ci=(1.437, 9.246),  # excludes 1
+            slope_se=2.0,
+            converged=True,
+        )
+        assert wide.tradeable, "unpooled, a CI excluding 1 is tradeable"
+        borrowed = replace(wide, pooled_slope=1.184, shrinkage=0.99)
+        assert not borrowed.tradeable
+        assert "shrinkage" in borrowed.gating_note
+
+        own = replace(wide, pooled_slope=2.0, shrinkage=0.2)
+        assert own.tradeable, "a lightly shrunk cell keeps its own signal"
+
+    def test_pooling_across_one_is_not_tradeable(self) -> None:
+        """If pooling moves the slope to the other side of 1.0, the direction
+        of the interval no longer matches the trade."""
+        cell = CellFit(
+            domain="crypto",
+            horizon="1w-1mo",
+            n_rows=500,
+            n_markets=60,
+            slope=0.70,
+            intercept=0.0,
+            slope_ci=(0.45, 0.95),  # excludes 1, says over-extended
+            slope_se=0.1,
+            converged=True,
+            pooled_slope=1.05,  # pooling flipped it to compressed
+            shrinkage=0.5,
+        )
+        assert not cell.tradeable
+
+    def test_population_ci_reported_for_global_claim(self) -> None:
+        fits = [
+            fit_cell(_synthetic_cell(slope=1.5, n_markets=300, seed=s, domain=d), n_boot=120)
+            for s, d in ((1, "politics"), (2, "crypto"), (3, "finance"))
+        ]
+        ci = population_slope_ci(fits)
+        assert ci is not None
+        low, high = ci
+        assert low < high
+        # Data generated at b=1.5 should put the population interval above 1.
+        assert low > 1.0
 
     def test_failed_cell_inherits_population_slope(self) -> None:
         good = fit_cell(_synthetic_cell(slope=1.5, n_markets=300, seed=9), n_boot=100)

@@ -52,6 +52,29 @@ def _dersimonian_laird(estimates: np.ndarray, variances: np.ndarray) -> tuple[fl
     return mu, tau_squared
 
 
+def population_slope_ci(cells: list[CellFit], *, z: float = 1.96) -> tuple[float, float] | None:
+    """CI for the population slope mu under the random-effects model.
+
+    This is the interval that matters for any cell whose own data was too
+    thin to speak — those cells trade mu, so the claim "mu != 1" is what has
+    to hold, and it must be tested here rather than borrowed from a
+    better-populated cell's interval.
+
+    se(mu)^2 = 1 / sum_i 1/(se_i^2 + tau^2)
+    """
+    usable = [c for c in cells if c.converged and c.slope_se is not None and np.isfinite(c.slope)]
+    if len(usable) < 2:
+        return None
+    estimates = np.array([c.slope for c in usable], dtype=np.float64)
+    variances = np.array([max(c.slope_se or _MIN_SE, _MIN_SE) ** 2 for c in usable])
+    mu, tau_squared = _dersimonian_laird(estimates, variances)
+    precision = float(np.sum(1.0 / (variances + tau_squared)))
+    if precision <= 0:
+        return None
+    se_mu = float(np.sqrt(1.0 / precision))
+    return mu - z * se_mu, mu + z * se_mu
+
+
 def partial_pool(
     cells: list[CellFit],
     *,

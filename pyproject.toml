@@ -48,7 +48,7 @@ warn_unreachable = true
 enable_error_code = ["ignore-without-code", "redundant-expr", "truthy-bool"]
 
 [[tool.mypy.overrides]]
-module = ["pyarrow.*"]
+module = ["pyarrow.*", "scipy.*"]
 ignore_missing_imports = true
 
 [tool.ruff]
