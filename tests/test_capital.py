@@ -20,9 +20,20 @@ NOW = datetime(2026, 7, 21, 12, 0, tzinfo=UTC)
 
 class TestPessimisticSettlement:
     def test_buffers_extend_nominal_close(self) -> None:
+        """Polymarket's buffer is the MEASURED p90 lag (13.9d -> 14d), not the
+        2-day guess it replaced; see costs/capital.py."""
         close = NOW + timedelta(days=30)
-        assert pessimistic_settlement(close, Venue.POLYMARKET_US) == close + timedelta(days=2)
+        assert pessimistic_settlement(close, Venue.POLYMARKET_INTL) == close + timedelta(days=14)
+        assert pessimistic_settlement(close, Venue.POLYMARKET_US) == close + timedelta(days=14)
         assert pessimistic_settlement(close, Venue.KALSHI) == close + timedelta(days=1)
+
+    def test_every_venue_declares_whether_its_buffer_is_measured(self) -> None:
+        from sibyl.costs.capital import SETTLEMENT_BUFFER, SETTLEMENT_BUFFER_MEASURED
+
+        assert set(SETTLEMENT_BUFFER_MEASURED) == set(SETTLEMENT_BUFFER)
+        # Only the venue we have real history for may claim to be measured.
+        assert SETTLEMENT_BUFFER_MEASURED[Venue.POLYMARKET_INTL]
+        assert not SETTLEMENT_BUFFER_MEASURED[Venue.KALSHI]
 
     def test_lockup_floored_at_one_day(self) -> None:
         past_close = NOW - timedelta(days=5)
@@ -44,10 +55,12 @@ class TestLockupApy:
         assert lockup_apy(Decimal("1"), Decimal("1.02"), Decimal("30")) < 0
 
     def test_dispute_buffer_reduces_apy(self) -> None:
+        """The measured buffer more than doubles a 10-day lockup, which is the
+        whole point: the old 2-day guess flattered every APY."""
         close = NOW + timedelta(days=10)
         nominal_days = Decimal("10")
-        pessimistic = lockup_days(NOW, close, Venue.POLYMARKET_US)
-        assert pessimistic == Decimal("12")
+        pessimistic = lockup_days(NOW, close, Venue.POLYMARKET_INTL)
+        assert pessimistic == Decimal("24")
         assert lockup_apy(Decimal("1"), Decimal("0.97"), pessimistic) < lockup_apy(
             Decimal("1"), Decimal("0.97"), nominal_days
         )

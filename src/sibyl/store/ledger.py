@@ -246,7 +246,14 @@ class Ledger:
 
     def compact(self, min_parts: int = 50) -> dict[str, int]:
         """Rewrite each table's parts into one file. Many small Parquet files
-        slow every later read; a long backfill produces hundreds."""
+        slow every later read; a long backfill produces hundreds.
+
+        Reads exactly the parts it is about to delete — never the directory —
+        so a part written concurrently by a running backfill is neither
+        duplicated into the merged file nor deleted unmerged. Do not rely on
+        that for safety though: compacting while a writer is active is still
+        a bad idea, it is just no longer destructive.
+        """
         merged: dict[str, int] = {}
         for name, directory, schema in (
             ("markets", self.markets_dir, MARKETS_SCHEMA),
@@ -256,9 +263,16 @@ class Ledger:
             if len(parts) < min_parts:
                 merged[name] = 0
                 continue
-            table = pq.read_table(directory, schema=schema)
+            table = pq.read_table([str(p) for p in parts], schema=schema)
             tmp = directory / f"_compact-{uuid.uuid4().hex[:8]}.parquet.tmp"
             pq.write_table(table, tmp)
+            # Sources are removed BEFORE the merged file is renamed into
+            # place. The ordering is deliberate: the alternative leaves a
+            # window where both copies match the read glob, and silent
+            # duplicate rows corrupt a fit invisibly, whereas this ordering's
+            # failure mode is a visible row-count drop. A crash inside the
+            # window leaves the data in the `.parquet.tmp` file, which the
+            # read glob ignores — rename it back by hand to recover.
             for part in parts:
                 part.unlink()
             tmp.rename(directory / f"part-compacted-{datetime.now(UTC):%Y%m%dT%H%M%S}.parquet")

@@ -14,13 +14,40 @@ from decimal import Decimal
 
 from sibyl.venues.normalise import Venue
 
-# Conservative settlement buffers beyond nominal close. These are deliberate
-# overestimates pending measured resolution-lag distributions from Phase 2
-# (spec gives the mechanism but no numbers; tune from the resolution ledger).
+# Settlement buffers beyond nominal close, as a PESSIMISTIC (p90) estimate of
+# how long capital stays locked after a market's outcome window ends.
+#
+# These were guesses (2 days / 1 day) until measured against the resolution
+# ledger on 2026-10-11 (`sibyl lag`). The guess was badly optimistic:
+#
+#   Polymarket Intl, 1,217 markets settling at or after close:
+#       median 1.25d   p90 13.9d   p99 14.1d   max 60.3d
+#
+# p90 is ~7x the old 2-day assumption. That matters more than it looks: APY
+# is annualised over the lockup, so understating the buffer inflates the
+# ranking of exactly the long-settling markets most likely to be disputed.
+# p90 is chosen over p99 as "pessimistic but not paranoid"; raise it with
+# `buffer_percentile` reasoning if a strategy is sensitive to the tail.
 SETTLEMENT_BUFFER: dict[Venue, timedelta] = {
-    Venue.POLYMARKET_US: timedelta(days=2),  # UMA challenge window + dispute slack
-    Venue.POLYMARKET_INTL: timedelta(days=2),
-    Venue.KALSHI: timedelta(days=1),  # Outcome Review Committee lag
+    # Measured (p90). INTL is the venue we actually have history for.
+    Venue.POLYMARKET_INTL: timedelta(days=14),
+    # No US history is reachable from this jurisdiction. The US exchange runs
+    # the same UMA optimistic oracle, so the INTL figure is the best
+    # available proxy — carried over rather than invented.
+    Venue.POLYMARKET_US: timedelta(days=14),
+    # UNMEASURED. Kalshi demo reports median 0.02d / p90 0.05d / p99 18.8d,
+    # but demo is a paper market and its settlement timing is not evidence
+    # about production. Left as the original conservative guess; replace only
+    # with figures from a venue we can actually observe.
+    Venue.KALSHI: timedelta(days=1),
+}
+
+# Which venues' buffers rest on measured data vs. a documented assumption.
+# Anything False should be treated as a modelling input, not a fact.
+SETTLEMENT_BUFFER_MEASURED: dict[Venue, bool] = {
+    Venue.POLYMARKET_INTL: True,
+    Venue.POLYMARKET_US: False,
+    Venue.KALSHI: False,
 }
 
 # Idle-cash yield by venue: Kalshi pays ~4% APY on cash, Polymarket 0%.

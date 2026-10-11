@@ -1,6 +1,6 @@
 # SIBYL
 
-A prediction-market fair-value & edge engine for **Polymarket US** and **Kalshi**.
+A prediction-market fair-value & edge engine for **Polymarket**.
 Full design: [SIBYL-build-prompt.md](SIBYL-build-prompt.md).
 
 > The Sibyl gave true prophecies in ambiguous form. Market prices are the same:
@@ -11,53 +11,85 @@ Full design: [SIBYL-build-prompt.md](SIBYL-build-prompt.md).
 
 | Phase | Scope | State |
 |---|---|---|
-| 0 | Skeleton: config, venue clients, kill switch, logging | ✅ done |
-| 1 | Ingestion & cost model | ✅ fees, depth-walk execution, APY/capital, §5.2 parity property tests |
-| 2 | Historical store & resolution ledger | ✅ ledger + backfill + calibration query; full-depth backfill pending Kalshi prod key |
-| 3 | Calibration engine | ⬜ |
-| 4 | Semantic identity graph | ⬜ |
-| 5 | Alpha, sizing, paper trading | ⬜ |
-| 6 | Live (gated) | ⬜ |
+| 0 | Skeleton: config, venue clients, kill switch, logging | ✅ |
+| 1 | Ingestion & cost model (fees, depth walk, APY, parity) | ✅ |
+| 2 | Historical store & resolution ledger | ✅ |
+| 3 | Calibration engine | ✅ engine + walk-forward + honest report |
+| 4 | Semantic identity graph | ⬜ needs an Anthropic API key |
+| 5 | Alpha, sizing, paper trading | ⬜ **the finish line** |
+| 6 | Live trading | 🚫 out of scope — see below |
 
-Everything runs against **Kalshi demo** (`demo-api.kalshi.co`) and Polygon
-**Amoy** until Phase 6. `live=True` is refused unless the config is coherently
-production (mainnet chain, prod Kalshi env).
+### Phase 6 is out of scope, deliberately
 
-## Verified domain facts
+The operator is in Canada. Kalshi does not serve Canadian residents, and
+Polymarket is banned in Ontario (OSC enforcement, to at least 2027) and
+geo-blocked in Alberta, BC and Quebec. Details and sources:
+[research/jurisdiction.md](research/jurisdiction.md).
 
-- Polymarket **US** fees (effective 2026-07-01, verified against
-  [docs.polymarket.us/fees](https://docs.polymarket.us/fees) on 2026-07-21):
-  taker `0.06·C·p·(1−p)`, maker rebate `0.0125·C·p·(1−p)`, **banker's rounding**
-  to the cent, volume rebate tiers 10/25/50%. The golden test pins our formula
-  to the venue's published rows ([fixture](tests/fixtures/polymarket_fee_table_100lot.json)).
-- Polymarket **International** uses a completely different schedule
-  (per-category coefficients, no maker rebate). Deliberately unimplemented;
-  pricing INTL books with US fees raises `NotImplementedError`.
-- Kalshi books are **bids-only**, ascending, best bid last; asks are derived
-  (`yes_ask = 1 − best_no_bid`). Property-tested in
-  [tests/test_normalise.py](tests/test_normalise.py), validated against a live
-  demo book.
+This costs the project less than it sounds. Spec §9 is explicit that the real
+deliverable is Point 6 — an honest paper-trading write-up that names its own
+dead hypotheses. **Phase 5 is the finish line**, and a system that reliably
+tells you it has no edge is the thing worth building.
 
-## Commands
+One consequence worth stating plainly: cross-venue arbitrage (§2.3.2), the
+spec's best-documented inefficiency, is **unexecutable** here. The parity
+conditions and semantic layer stay as tested research instruments.
+
+## What it does today
 
 ```bash
-uv run pytest            # offline suite (78 tests)
-uv run pytest -m live    # live connectivity smoke tests
-uv run mypy              # strict, src + tests
-uv run ruff check .
-uv run sibyl status      # config + eligibility + venue connectivity
+uv run sibyl status                     # config, venue eligibility, connectivity
+uv run sibyl backfill --venue polymarket --max-pages 400 --price-markets 3000
+uv run sibyl store                      # ledger rollup
+uv run sibyl lag                        # measured settlement lag
+uv run sibyl calibrate --out report.txt # fit slopes, walk forward, report honestly
+uv run sibyl compact                    # merge Parquet parts (not while backfilling)
+
+uv run pytest                           # offline suite
+uv run pytest -m live                    # live connectivity checks
+uv run mypy && uv run ruff check .
 ```
+
+## Things that are true and easy to get wrong
+
+Each of these is enforced by a test, and most were found by running the code
+against real data rather than by reading the spec.
+
+- **Two Polymarket venues, two incompatible fee schedules.** US: taker 0.06
+  with a per-fill maker rebate, cent rounding. International: per-category
+  taker coefficients (geopolitics is *free*, crypto 0.07, politics 0.04),
+  5-decimal rounding, makers never charged. Crossing them invents edge.
+- **INTL maker rebates are not a cost reduction.** They are a daily pro-rata
+  share of the taker-fee pool, unknowable per fill — modelled as unmodelled
+  upside, never subtracted from effective cost.
+- **`endDate` is not the resolution date.** It is usually a far-future
+  placeholder; 88% of markets settle before it, median 112 days early.
+  Horizons anchor on `LEAST(close_time, settled_time)`.
+- **Settlement lag was measured, and the guess was 7× too optimistic.**
+  p90 is 13.9 days, not the 2 days originally assumed.
+- **Resolved markets have no CLOB price history** — it is pruned at
+  resolution. Paths are rebuilt from the trade tape, which means they are
+  prices someone traded at, not prices you could have hit.
+- **Rows are not independent observations.** Hourly rows within a market are
+  one bet counted many times, so CIs come from a market-clustered bootstrap
+  and reliability bins report market-level frequencies. A row-level read of
+  the same data showed a +15pp "inefficiency" that was a few dozen markets.
+- **A cell whose slope CI straddles b = 1 is not tradeable**, and the system
+  says so rather than emitting a small positive edge.
+- **gamma `/events` offset paging dies at ~2100 rows**; deep pagination needs
+  the `/events/keyset` cursor endpoint.
+
+Full, measured caveats: [research/data-limitations.md](research/data-limitations.md).
 
 ## Configuration
 
 Environment variables, prefix `SIBYL_`, nested with `__`:
 
 ```
-SIBYL_KALSHI__API_KEY_ID=...             # from kalshi demo account settings
-SIBYL_KALSHI__PRIVATE_KEY_PATH=...       # PEM path OUTSIDE the repo
-SIBYL_POLYMARKET__PLATFORM=us            # us | intl — never both
+SIBYL_POLYMARKET__PLATFORM=intl     # us | intl — never both
+SIBYL_KALSHI__ENABLED=false         # jurisdiction; demo reads still work
 SIBYL_RISK__DAILY_LOSS_LIMIT_USD=50
 ```
 
-No secrets in git, ever. The kill switch is the `KILL_SWITCH` file: `touch` it
-to halt all trading paths immediately.
+No secrets in git, ever. The kill switch is the `KILL_SWITCH` file: `touch`
+it to halt every trading path immediately.
