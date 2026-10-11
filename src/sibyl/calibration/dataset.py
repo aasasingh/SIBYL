@@ -44,6 +44,7 @@ def load_rows(
         CAST(yes_price AS DOUBLE) AS price,
         CAST(y AS DOUBLE) AS y,
         market_id,
+        cluster_id,
         epoch(close_time) AS close_epoch
     FROM base
     WHERE horizon_days >= {min_horizon_days}
@@ -67,5 +68,6 @@ def load_rows(
         price=np.asarray(table["price"].to_pylist(), dtype=np.float64),
         y=np.asarray(table["y"].to_pylist(), dtype=np.float64),
         market_id=np.asarray(table["market_id"].to_pylist(), dtype=np.str_),
+        cluster_id=np.asarray(table["cluster_id"].to_pylist(), dtype=np.str_),
         close_time=np.asarray(table["close_epoch"].to_pylist(), dtype=np.float64),
     )

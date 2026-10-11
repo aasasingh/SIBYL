@@ -5,7 +5,12 @@ of whichever API key is loaded. This file records what the config encodes and
 why. **It is a snapshot, not a legal opinion, and the situation is actively
 litigated — re-check before enabling anything live.**
 
-## Operator: Canada
+## Operator: Ontario, Canada — SETTLED
+
+This is no longer an open question. The operator is an Ontario resident, and
+`Settings.operator_province` defaults to `"ON"` with `live_trading_permitted`
+returning False for every blocked province. Setting `live=True` raises at
+config construction. **Phase 6 is closed by construction**, not by a flag.
 
 ### Kalshi — unavailable
 
@@ -46,10 +51,10 @@ Sources: [Canadian Gaming Business](https://www.canadiangamingbusiness.com/2026/
 
 ## What this means for the build
 
-**Phase 6 (live trading) is presumed out of scope.** In four provinces —
-including Ontario, where it is a standing regulatory ban rather than a
-platform choice — there is no lawful path to it, and the remaining provinces
-need confirmation the operator can and should verify personally.
+**Phase 6 (live trading) is out of scope.** The operator is in Ontario,
+where Polymarket operates under a permanent OSC undertaking not to serve
+residents. There is no lawful path to live trading, and the config enforces
+that rather than documenting it.
 
 This is not a loss for the project. Spec §9 is explicit that the real
 deliverable is Point 6: an honest paper-trading write-up that names its own

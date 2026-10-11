@@ -105,11 +105,13 @@ def render(
     else:
         lines.append(
             f"  {'fold':<5} {'train_mkts':<11} {'test_mkts':<10} "
+            f"{'tr_evts':<8} {'te_evts':<8} "
             f"{'brier_model':<12} {'brier_raw':<11} {'improvement':<12}"
         )
         for f in folds:
             lines.append(
                 f"  {f.fold:<5} {f.train_markets:<11} {f.test_markets:<10} "
+                f"{f.train_clusters:<8} {f.test_clusters:<8} "
                 f"{f.brier_model:<12.6f} {f.brier_baseline:<11.6f} {f.improvement:<+12.6f}"
             )
         improvements = [f.improvement for f in folds]

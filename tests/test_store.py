@@ -279,10 +279,12 @@ class TestResolutionQueries:
             ]
         )
         with ledger.connect() as con:
-            rows = calibration_rows(con).fetchall()
+            rel = calibration_rows(con)
+            cols = rel.columns
+            rows = [dict(zip(cols, r, strict=True)) for r in rel.fetchall()]
             counts = resolved_market_counts(con)
         assert len(rows) == 3  # post-close row excluded
-        by_market = {(r[1], r[5]) for r in rows}  # (market_id, y)
+        by_market = {(r["market_id"], r["y"]) for r in rows}
         assert ("A", 1) in by_market and ("B", 0) in by_market
         assert counts == [("kalshi", "politics", 2, 2)]
 
@@ -326,9 +328,11 @@ class TestResolutionQueries:
             ]
         )
         with ledger.connect() as con:
-            rows = calibration_rows(con).fetchall()
+            rel = calibration_rows(con)
+            cols = rel.columns
+            rows = [dict(zip(cols, r, strict=True)) for r in rel.fetchall()]
         assert len(rows) == 1
-        horizon_days = float(rows[0][6])
+        horizon_days = float(rows[0]["horizon_days"])
         assert horizon_days == pytest.approx(3.0, abs=0.01), (
             f"horizon {horizon_days:.1f}d — anchored on the placeholder close "
             "instead of actual resolution"
@@ -364,9 +368,11 @@ class TestResolutionQueries:
             ]
         )
         with ledger.connect() as con:
-            rows = calibration_rows(con).fetchall()
+            rel = calibration_rows(con)
+            cols = rel.columns
+            rows = [dict(zip(cols, r, strict=True)) for r in rel.fetchall()]
         assert len(rows) == 1
-        assert float(rows[0][4]) == pytest.approx(0.70)
+        assert float(rows[0]["yes_price"]) == pytest.approx(0.70)
 
     def test_horizon_buckets(self) -> None:
         assert horizon_bucket(0.02) == "0-1h"

@@ -112,6 +112,53 @@ def _calibrate(args: argparse.Namespace) -> int:
     return 0
 
 
+def _eiv(args: argparse.Namespace) -> int:
+    """Report measurement-error attenuation per cell (see calibration/eiv.py)."""
+    import numpy as np
+
+    from sibyl.calibration.dataset import load_rows
+    from sibyl.calibration.eiv import attenuation_for_cell, estimate_noise
+    from sibyl.calibration.fit import fit_logistic, logit
+
+    rows = load_rows(Ledger(args.data_dir))
+    if len(rows) == 0:
+        log.error("eiv.no_data", hint="run `sibyl backfill --price-markets N` first")
+        return 1
+    pooled = estimate_noise(rows.price, rows.market_id)
+    if pooled is not None:
+        log.info(
+            "eiv.pooled",
+            noise_sd=round(float(np.sqrt(pooled.sigma2_noise)), 4),
+            reliability=round(pooled.reliability, 4),
+            noise_share=round(pooled.noise_share, 4),
+            var_observed=round(pooled.var_observed, 3),
+            r2=round(pooled.r2, 3),
+        )
+    crossers = 0
+    for cell in rows.cells():
+        if cell.n_rows < args.min_rows or cell.n_clusters < 10:
+            continue
+        _ic, observed, converged = fit_logistic(logit(cell.price), cell.y)
+        if not converged or not np.isfinite(observed):
+            continue
+        result = attenuation_for_cell(cell, observed)
+        if result is None:
+            continue
+        crossers += bool(result.crosses_one)
+        log.info(
+            "eiv.cell",
+            cell=result.cell,
+            n=result.n_rows,
+            b_observed=round(result.observed_slope, 3),
+            reliability=round(result.reliability, 3),
+            b_corrected=round(result.corrected_slope, 3),
+            noise_sd=round(result.noise_sd, 3),
+            crosses_one=result.crosses_one,
+        )
+    log.info("eiv.summary", cells_crossing_one=crossers)
+    return 0
+
+
 def _lag(args: argparse.Namespace) -> int:
     from sibyl.store.resolutions import early_resolution_rate, resolution_lag
 
@@ -128,6 +175,18 @@ def _lag(args: argparse.Namespace) -> int:
             )
         for venue, n, early in early_resolution_rate(con):
             log.info("store.early_resolution", venue=venue, n=n, fraction=round(early, 4))
+    return 0
+
+
+async def _record(args: argparse.Namespace) -> int:
+    from sibyl.record.recorder import record
+
+    await record(
+        data_dir=args.data_dir,
+        hours=args.hours,
+        n_markets=args.markets,
+        max_assets=args.max_assets,
+    )
     return 0
 
 
@@ -197,6 +256,20 @@ def main() -> None:
     lag = sub.add_parser("lag", help="measured settlement lag (basis for capital buffers)")
     lag.add_argument("--data-dir", type=Path, default=DEFAULT_DATA_DIR)
 
+    eiv = sub.add_parser("eiv", help="measurement-error attenuation: is the tape hiding a slope?")
+    eiv.add_argument("--data-dir", type=Path, default=DEFAULT_DATA_DIR)
+    eiv.add_argument("--min-rows", type=int, default=200)
+
+    rec = sub.add_parser(
+        "record", help="record live books+trades over WebSocket (input to the fill model)"
+    )
+    rec.add_argument("--data-dir", type=Path, default=DEFAULT_DATA_DIR)
+    rec.add_argument(
+        "--hours", type=float, default=None, help="stop after N hours (default: run until killed)"
+    )
+    rec.add_argument("--markets", type=int, default=60, help="most-liquid active markets to watch")
+    rec.add_argument("--max-assets", type=int, default=150, help="cap on subscribed token ids")
+
     args = parser.parse_args()
     configure_logging(json_output=args.json)
     if args.command == "status":
@@ -211,6 +284,10 @@ def main() -> None:
         sys.exit(_calibrate(args))
     elif args.command == "lag":
         sys.exit(_lag(args))
+    elif args.command == "eiv":
+        sys.exit(_eiv(args))
+    elif args.command == "record":
+        sys.exit(asyncio.run(_record(args)))
 
 
 if __name__ == "__main__":

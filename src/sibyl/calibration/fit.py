@@ -13,10 +13,14 @@ a recalibrated probability meets an effective cost.
 
 Two statistical commitments the spec insists on, both load-bearing:
 
-  * Confidence intervals come from a MARKET-CLUSTERED bootstrap. Hourly rows
-    inside one market are the same bet observed repeatedly — a row-level
-    bootstrap treats ~130 correlated observations as independent evidence and
-    reports intervals several times too narrow, turning noise into signal.
+  * Confidence intervals come from an EVENT-CLUSTERED bootstrap. Two levels
+    of dependence have to be absorbed, not one. Hourly rows inside a market
+    are the same bet observed repeatedly; and markets inside an event share
+    an outcome -- in a NegRisk set exactly one market resolves YES, so the
+    rest are mechanically implied. Measured here: 10.66 markets per event,
+    largest event 122 markets. Clustering on the market absorbed only the
+    first level and still overstated the evidence by roughly an order of
+    magnitude; clustering on the event absorbs both.
   * A cell whose CI straddles b = 1 is reported as NOT TRADEABLE, however
     pretty its point estimate looks.
 """
@@ -34,6 +38,9 @@ from scipy.special import expit as _scipy_expit
 _EPS = 1e-4
 MIN_ROWS = 50
 MIN_MARKETS = 10
+# Independent units needed before an interval means anything. Events, not
+# markets: a cell can hold 300 markets drawn from 8 events.
+MIN_CLUSTERS = 10
 MIN_LABEL_BALANCE = 3  # need >= this many of each outcome to identify a slope
 
 FloatArray = npt.NDArray[np.float64]
@@ -61,6 +68,7 @@ class CellFit:
     n_markets: int
     slope: float
     intercept: float
+    n_clusters: int = 0
     slope_ci: tuple[float, float] | None = None
     # Clustered-bootstrap standard error — the shrinkage weight for pooling.
     slope_se: float | None = None
@@ -147,6 +155,7 @@ class CellFit:
         )
         return (
             f"{self.domain:<14} {self.horizon:<8} n={self.n_rows:<6} m={self.n_markets:<5} "
+            f"e={self.n_clusters:<5} "
             f"b={self.slope:.3f} {ci}{pooled} dBrier={self.brier_improvement:+.5f} {verdict}"
             + (f" [{self.note}]" if self.note else "")
         )
@@ -199,26 +208,27 @@ def brier(predicted: FloatArray, y: FloatArray) -> float:
 def clustered_bootstrap_slope(
     x: FloatArray,
     y: FloatArray,
-    market_ids: npt.NDArray[np.str_],
+    cluster_ids: npt.NDArray[np.str_],
     *,
     n_boot: int = 400,
     alpha: float = 0.05,
     seed: int = 20260721,
 ) -> tuple[tuple[float, float], float] | None:
-    """Percentile CI and standard error for the slope, resampling MARKETS.
+    """Percentile CI and standard error for the slope, resampling CLUSTERS.
 
-    Each draw picks whole markets with replacement and refits on their pooled
-    rows, so the interval reflects how much independent evidence there really
-    is: the number of distinct bets, not the number of hourly snapshots.
+    A cluster is an event (all its markets), not a single market, because
+    markets within an event share an outcome. Each draw picks whole clusters
+    with replacement and refits on their pooled rows, so the interval
+    reflects how much genuinely independent evidence there is.
     Returns ((ci_low, ci_high), se) or None when the cell cannot support it.
     """
     rng = np.random.default_rng(seed)
-    unique = np.unique(market_ids)
-    if unique.size < MIN_MARKETS:
+    unique = np.unique(cluster_ids)
+    if unique.size < MIN_CLUSTERS:
         return None
-    # Row indices grouped by market, so a resample is a cheap concatenate.
-    order = np.argsort(market_ids, kind="stable")
-    sorted_ids = market_ids[order]
+    # Row indices grouped by cluster, so a resample is a cheap concatenate.
+    order = np.argsort(cluster_ids, kind="stable")
+    sorted_ids = cluster_ids[order]
     boundaries = np.searchsorted(sorted_ids, unique)
     groups = np.split(order, boundaries[1:])
 
@@ -234,7 +244,10 @@ def clustered_bootstrap_slope(
         _, slope, converged = fit_logistic(x[idx], yb)
         if converged and np.isfinite(slope):
             slopes.append(slope)
-    if len(slopes) < n_boot // 4:
+    # An absolute floor as well as a relative one: with a small n_boot the
+    # relative test degenerates (n_boot // 4 == 0) and would let an empty
+    # slope list reach np.quantile.
+    if len(slopes) < max(20, n_boot // 4):
         return None
     low, high = np.quantile(slopes, [alpha / 2, 1 - alpha / 2])
     return (float(low), float(high)), float(np.std(slopes, ddof=1))
@@ -249,6 +262,7 @@ class CellData:
     price: FloatArray
     y: FloatArray
     market_id: npt.NDArray[np.str_]
+    cluster_id: npt.NDArray[np.str_] | None = None
     weight: FloatArray | None = None
 
     @property
@@ -258,6 +272,15 @@ class CellData:
     @property
     def n_markets(self) -> int:
         return int(np.unique(self.market_id).size)
+
+    @property
+    def clusters(self) -> npt.NDArray[np.str_]:
+        """Event ids, or market ids when no event grouping was supplied."""
+        return self.market_id if self.cluster_id is None else self.cluster_id
+
+    @property
+    def n_clusters(self) -> int:
+        return int(np.unique(self.clusters).size)
 
 
 def fit_cell(
@@ -279,6 +302,7 @@ def fit_cell(
         horizon=data.horizon,
         n_rows=data.n_rows,
         n_markets=data.n_markets,
+        n_clusters=data.n_clusters,
         slope=float("nan"),
         intercept=float("nan"),
         converged=False,
@@ -287,6 +311,13 @@ def fit_cell(
         return CellFit(**{**base.__dict__, "note": f"only {data.n_rows} rows"})
     if data.n_markets < min_markets:
         return CellFit(**{**base.__dict__, "note": f"only {data.n_markets} markets"})
+    if data.n_clusters < MIN_CLUSTERS:
+        return CellFit(
+            **{
+                **base.__dict__,
+                "note": f"only {data.n_clusters} events ({data.n_markets} markets)",
+            }
+        )
     positives = int(data.y.sum())
     negatives = data.n_rows - positives
     if min(positives, negatives) < MIN_LABEL_BALANCE:
@@ -298,13 +329,14 @@ def fit_cell(
         return CellFit(**{**base.__dict__, "note": "fit did not converge"})
 
     predicted = expit(intercept + slope * x)
-    boot = clustered_bootstrap_slope(x, data.y, data.market_id, n_boot=n_boot, seed=seed)
+    boot = clustered_bootstrap_slope(x, data.y, data.clusters, n_boot=n_boot, seed=seed)
     ci, se = boot if boot is not None else (None, None)
     return CellFit(
         domain=data.domain,
         horizon=data.horizon,
         n_rows=data.n_rows,
         n_markets=data.n_markets,
+        n_clusters=data.n_clusters,
         slope=slope,
         intercept=intercept,
         slope_ci=ci,

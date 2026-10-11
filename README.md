@@ -15,15 +15,17 @@ Full design: [SIBYL-build-prompt.md](SIBYL-build-prompt.md).
 | 1 | Ingestion & cost model (fees, depth walk, APY, parity) | ✅ |
 | 2 | Historical store & resolution ledger | ✅ |
 | 3 | Calibration engine | ✅ built, run, and **hypothesis killed** — [findings](research/phase3-findings.md) |
-| 4 | Semantic identity graph | ⬜ needs an Anthropic API key |
-| 5 | Alpha, sizing, paper trading | ⬜ **the finish line** |
-| 6 | Live trading | 🚫 out of scope — see below |
+| 4 | Semantic identity graph | 🔻 descoped — cross-venue execution is unavailable |
+| 5 | Alpha, sizing, paper trading | 🔄 recorder running; [fill model designed](research/fill-model-design.md) |
+| 6 | Live trading | 🚫 closed by construction (Ontario) |
 
-### Phase 6 is out of scope, deliberately
+### Phase 6 is closed by construction
 
-The operator is in Canada. Kalshi does not serve Canadian residents, and
-Polymarket is banned in Ontario (OSC enforcement, to at least 2027) and
-geo-blocked in Alberta, BC and Quebec. Details and sources:
+The operator is an Ontario resident. Kalshi does not serve Canadians, and
+Polymarket operates under a permanent OSC undertaking not to serve Ontario
+residents (geo-blocked in Alberta, BC and Quebec too). `Settings` defaults to
+`operator_province="ON"` and **raises if `live=True`** — this is enforced,
+not just documented. Sources:
 [research/jurisdiction.md](research/jurisdiction.md).
 
 This costs the project less than it sounds. Spec §9 is explicit that the real
@@ -37,14 +39,20 @@ conditions and semantic layer stay as tested research instruments.
 
 ### Phase 3 result: no tradeable recalibration edge
 
-Fitted on 159,182 hourly rows across 1,977 resolved markets. The population
-slope looks like the published research (mu = 1.179, CI [1.066, 1.292]), but
-**walk-forward out-of-sample improvement is -0.0066, positive in only 1 of 4
-folds** — the recalibration does not beat the raw price. Of 47 testable
-cells, 5 clear the tradeability bar against ~2.4 expected by chance.
+Fitted on 159,182 hourly rows / 1,977 markets / 1,017 events. The population
+slope resembles the published research (mu = 1.203, CI [1.082, 1.324]), but
+**out-of-sample Brier improvement is -0.0030, positive in 2 of 4 folds** —
+the recalibration does not beat the raw quoted price, stably across 3/4/6/8
+folds. Of 45 testable cells, **4 clear the tradeability bar against ~2.2
+expected by chance**, i.e. the multiple-testing null.
 
-So the system declines to trade the signal, which is the designed behaviour.
-Write-up, caveats and falsifiable next steps:
+The claim is "no *usable* edge found", not "no edge exists". Measurement-error
+attenuation was measured rather than assumed (noise share 1.8%, no cell
+crosses b=1) and a power experiment shows a true slope >= 1.3 would still
+have been detected. Clustering and fold splits are at the **event** level,
+because NegRisk sets share an outcome (10.66 markets per event here).
+
+Write-up, objections addressed, and falsifiable next steps:
 [research/phase3-findings.md](research/phase3-findings.md).
 
 The most useful by-product: a mid-range "+15pp inefficiency" in the first run
@@ -59,6 +67,8 @@ uv run sibyl backfill --venue polymarket --max-pages 400 --price-markets 3000
 uv run sibyl store                      # ledger rollup
 uv run sibyl lag                        # measured settlement lag
 uv run sibyl calibrate --out report.txt # fit slopes, walk forward, report honestly
+uv run sibyl eiv                        # measurement-error attenuation check
+uv run sibyl record                     # record live books+trades (run continuously)
 uv run sibyl compact                    # merge Parquet parts (not while backfilling)
 
 uv run pytest                           # offline suite

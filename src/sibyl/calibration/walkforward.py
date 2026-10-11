@@ -5,11 +5,17 @@ question that matters is: if we had fitted on data available up to time T,
 would the resulting recalibration have beaten the raw price on markets that
 resolved after T?
 
-Folds are split on RESOLUTION TIME (close_time), not on row time, and a
-market belongs entirely to one fold. Splitting rows would leak: the same
-market's early hours would train the model that scores its later hours, and
-the label is a property of the market, so the answer would already be in the
-training set.
+Folds are split on RESOLUTION TIME (close_time), not on row time, and a whole
+EVENT belongs to one fold. Two leaks are being closed:
+
+  * Splitting rows would leak directly -- a market's early hours would train
+    the model that scores its later hours, and the label is a property of the
+    market, so the answer is already in the training set.
+  * Splitting markets would still leak through event structure. Markets in a
+    NegRisk set are mutually exclusive: exactly one resolves YES. Train on
+    "candidate A won" and the test fold's "did candidate B win?" is already
+    answered. With 10.66 markets per event in this data, that is not an edge
+    case, it is the common case.
 """
 
 from __future__ import annotations
@@ -42,9 +48,16 @@ class Rows:
     y: FloatArray
     market_id: npt.NDArray[np.str_]
     close_time: FloatArray  # unix seconds; fold boundary key
+    # Event id (fallback: market id). The unit of both clustering and
+    # splitting -- see the module docstring.
+    cluster_id: npt.NDArray[np.str_] | None = None
 
     def __len__(self) -> int:
         return int(self.price.shape[0])
+
+    @property
+    def clusters(self) -> npt.NDArray[np.str_]:
+        return self.market_id if self.cluster_id is None else self.cluster_id
 
     def take(self, mask: npt.NDArray[np.bool_]) -> Rows:
         return Rows(
@@ -54,6 +67,7 @@ class Rows:
             y=self.y[mask],
             market_id=self.market_id[mask],
             close_time=self.close_time[mask],
+            cluster_id=None if self.cluster_id is None else self.cluster_id[mask],
         )
 
     def cells(self) -> list[CellData]:
@@ -69,6 +83,7 @@ class Rows:
                     price=self.price[mask],
                     y=self.y[mask],
                     market_id=self.market_id[mask],
+                    cluster_id=None if self.cluster_id is None else self.cluster_id[mask],
                 )
             )
         return out
@@ -86,6 +101,8 @@ class FoldResult:
     n_cells_used: int
     n_cells_tradeable: int
     split_time: float
+    train_clusters: int = 0
+    test_clusters: int = 0
 
     @property
     def improvement(self) -> float:
@@ -93,15 +110,28 @@ class FoldResult:
         return self.brier_baseline - self.brier_model
 
 
-def _market_level_split(
+def _cluster_level_split(
     rows: Rows, n_folds: int, min_train_frac: float
 ) -> list[tuple[npt.NDArray[np.bool_], npt.NDArray[np.bool_], float]]:
-    """Expanding-window splits on market close time, whole markets per side."""
-    markets, first_idx = np.unique(rows.market_id, return_index=True)
-    market_close = rows.close_time[first_idx]
-    order = np.argsort(market_close, kind="stable")
-    sorted_markets = markets[order]
-    sorted_close = market_close[order]
+    """Expanding-window splits on close time, whole EVENTS per side.
+
+    A cluster's position in time is its EARLIEST close, so an event cannot
+    straddle the boundary and land partly in both folds.
+    """
+    cluster_keys = rows.clusters
+    unique = np.unique(cluster_keys)
+    # Earliest close per cluster: min, not first-seen, so ordering is
+    # deterministic regardless of row order.
+    order_by_key = np.argsort(cluster_keys, kind="stable")
+    sorted_keys = cluster_keys[order_by_key]
+    sorted_times = rows.close_time[order_by_key]
+    boundaries = np.searchsorted(sorted_keys, unique)
+    groups = np.split(sorted_times, boundaries[1:])
+    cluster_close = np.array([g.min() for g in groups], dtype=np.float64)
+
+    order = np.argsort(cluster_close, kind="stable")
+    sorted_markets = unique[order]
+    sorted_close = cluster_close[order]
     n_markets = sorted_markets.size
 
     splits: list[tuple[npt.NDArray[np.bool_], npt.NDArray[np.bool_], float]] = []
@@ -118,8 +148,8 @@ def _market_level_split(
         test_markets = set(sorted_markets[cut:test_end].tolist())
         if not test_markets:
             break
-        train_mask = np.isin(rows.market_id, list(train_markets))
-        test_mask = np.isin(rows.market_id, list(test_markets))
+        train_mask = np.isin(cluster_keys, list(train_markets))
+        test_mask = np.isin(cluster_keys, list(test_markets))
         splits.append((train_mask, test_mask, float(sorted_close[cut])))
     return splits
 
@@ -141,7 +171,7 @@ def walk_forward(
     """
     results: list[FoldResult] = []
     for fold, (train_mask, test_mask, split_time) in enumerate(
-        _market_level_split(rows, n_folds, min_train_frac)
+        _cluster_level_split(rows, n_folds, min_train_frac)
     ):
         train, test = rows.take(train_mask), rows.take(test_mask)
         if len(train) == 0 or len(test) == 0:
@@ -188,6 +218,8 @@ def walk_forward(
                 test_rows=int(scored.sum()),
                 train_markets=int(np.unique(train.market_id).size),
                 test_markets=int(np.unique(test.market_id).size),
+                train_clusters=int(np.unique(train.clusters).size),
+                test_clusters=int(np.unique(test.clusters).size),
                 brier_model=brier(predicted[scored], test.y[scored]),
                 brier_baseline=brier(np.clip(test.price[scored], 0.0, 1.0), test.y[scored]),
                 n_cells_used=len(used),

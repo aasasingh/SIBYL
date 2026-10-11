@@ -34,3 +34,6 @@ Thumbs.db
 
 # Backfill logs
 backfill_run.log
+
+# Recorder logs
+record_run.log

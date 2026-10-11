@@ -29,6 +29,12 @@ CALIBRATION_SQL = f"""
 SELECT
     p.venue,
     p.market_id,
+    -- Clustering/splitting unit. Markets inside one event share an outcome:
+    -- in a NegRisk set exactly one resolves YES, so the others are
+    -- mechanically implied. Measured on real data: 10.66 markets per event,
+    -- largest event 122 markets. Treating markets as independent overstated
+    -- the evidence by roughly an order of magnitude.
+    COALESCE(NULLIF(m.event_id, ''), m.market_id) AS cluster_id,
     m.domain,
     p.ts,
     COALESCE(p.price, (p.bid + p.ask) / 2) AS yes_price,

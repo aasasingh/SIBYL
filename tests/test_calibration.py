@@ -25,7 +25,12 @@ from sibyl.calibration.fit import (
     logit,
 )
 from sibyl.calibration.hierarchical import partial_pool, population_slope_ci
-from sibyl.calibration.walkforward import Rows, reliability_table, walk_forward
+from sibyl.calibration.walkforward import (
+    Rows,
+    _cluster_level_split,
+    reliability_table,
+    walk_forward,
+)
 
 
 def _synthetic_cell(
@@ -347,3 +352,121 @@ def test_brier_bounds() -> None:
     y = np.array([1.0, 0.0])
     assert brier(np.array([1.0, 0.0]), y) == 0.0
     assert brier(np.array([0.0, 1.0]), y) == 1.0
+
+
+class TestEventLevelClustering:
+    """Markets inside an event share an outcome (NegRisk: exactly one YES),
+    so the event is the independent unit, not the market."""
+
+    @staticmethod
+    def _event_structured_cell(markets_per_event: int = 10, n_events: int = 40) -> CellData:
+        """Events x markets, where every market in an event shares the
+        event's single outcome — the NegRisk dependence structure."""
+        rng = np.random.default_rng(99)
+        prices, ys, mids, cids = [], [], [], []
+        for e in range(n_events):
+            outcome = float(rng.random() < 0.5)
+            for k in range(markets_per_event):
+                base = float(rng.uniform(0.1, 0.9))
+                for _ in range(6):
+                    prices.append(base)
+                    ys.append(outcome)  # shared across the whole event
+                    mids.append(f"E{e:03d}M{k:02d}")
+                    cids.append(f"E{e:03d}")
+        return CellData(
+            domain="politics",
+            horizon="2d-1w",
+            price=np.array(prices),
+            y=np.array(ys),
+            market_id=np.array(mids, dtype=np.str_),
+            cluster_id=np.array(cids, dtype=np.str_),
+        )
+
+    def test_clustering_direction_is_not_assumed(self) -> None:
+        """Deliberately NOT asserting that event clustering widens the CI.
+
+        Both directions were observed in synthetic designs: when price
+        variation lives WITHIN an event and the outcome is shared, each event
+        is an informative within-event comparison and bundling can tighten
+        the interval rather than widen it. The defensible claims are that the
+        evidence is counted in events (below), that an event never straddles
+        a fold (TestWalkForwardEventSplit), and whatever the real data shows
+        -- measured in research/phase3-findings.md, not assumed here.
+        """
+        data = self._event_structured_cell()
+        by_event = clustered_bootstrap_slope(logit(data.price), data.y, data.clusters, n_boot=150)
+        by_market = clustered_bootstrap_slope(logit(data.price), data.y, data.market_id, n_boot=150)
+        assert by_event is not None and by_market is not None
+        # Both are finite intervals; the ordering is an empirical question.
+        for (low, high), _se in (by_event, by_market):
+            assert np.isfinite(low) and np.isfinite(high) and high > low
+
+    def test_cell_counts_events_separately_from_markets(self) -> None:
+        data = self._event_structured_cell()
+        assert data.n_markets == 400
+        assert data.n_clusters == 40
+        fit = fit_cell(data, n_boot=100)
+        assert fit.n_clusters == 40
+        assert fit.n_markets == 400
+
+    def test_cell_with_many_markets_but_few_events_is_rejected(self) -> None:
+        """300 markets drawn from 3 events is 3 observations, not 300."""
+        rng = np.random.default_rng(5)
+        prices, ys, mids, cids = [], [], [], []
+        for e in range(3):
+            outcome = float(rng.random() < 0.5)
+            for k in range(100):
+                for _ in range(6):
+                    prices.append(float(rng.uniform(0.1, 0.9)))
+                    ys.append(outcome)
+                    mids.append(f"E{e}M{k:03d}")
+                    cids.append(f"E{e}")
+        data = CellData(
+            domain="politics",
+            horizon="2d-1w",
+            price=np.array(prices),
+            y=np.array(ys),
+            market_id=np.array(mids, dtype=np.str_),
+            cluster_id=np.array(cids, dtype=np.str_),
+        )
+        fit = fit_cell(data, n_boot=100)
+        assert not fit.tradeable
+        assert "events" in fit.note
+
+
+class TestWalkForwardEventSplit:
+    def test_events_are_never_split_across_folds(self) -> None:
+        """A NegRisk set straddling the boundary would hand the test fold its
+        own answer: train on 'A won', and 'did B win?' is already resolved."""
+        rng = np.random.default_rng(3)
+        n_events, per_event, rows_per = 60, 5, 4
+        domain, horizon, price, y, mid, cid, close = [], [], [], [], [], [], []
+        for e in range(n_events):
+            outcome = float(rng.random() < 0.5)
+            t = 1.75e9 + e * 3600 * 24
+            for k in range(per_event):
+                for _ in range(rows_per):
+                    domain.append("politics")
+                    horizon.append("2d-1w")
+                    price.append(float(rng.uniform(0.1, 0.9)))
+                    y.append(outcome)
+                    mid.append(f"E{e:03d}M{k}")
+                    cid.append(f"E{e:03d}")
+                    close.append(t)
+        rows = Rows(
+            domain=np.array(domain, dtype=np.str_),
+            horizon=np.array(horizon, dtype=np.str_),
+            price=np.array(price),
+            y=np.array(y),
+            market_id=np.array(mid, dtype=np.str_),
+            close_time=np.array(close),
+            cluster_id=np.array(cid, dtype=np.str_),
+        )
+        splits = _cluster_level_split(rows, n_folds=3, min_train_frac=0.4)
+        assert splits
+        for train_mask, test_mask, _ in splits:
+            train_events = set(rows.clusters[train_mask].tolist())
+            test_events = set(rows.clusters[test_mask].tolist())
+            assert not (train_events & test_events), (
+                f"event(s) in both folds: {sorted(train_events & test_events)[:3]}"
+            )

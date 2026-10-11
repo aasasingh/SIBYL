@@ -17,6 +17,12 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 
 from sibyl.venues.normalise import Venue
 
+# Provinces where Polymarket cannot lawfully be traded by a resident, as of
+# 2026-10-11 (see research/jurisdiction.md for sources):
+#   ON  - permanent OSC undertaking, reported binding to at least 2027
+#   AB, BC, QC - geo-blocked by Polymarket's 2026-07-06 terms update
+BLOCKED_PROVINCES: frozenset[str] = frozenset({"ON", "AB", "BC", "QC"})
+
 
 class KalshiSettings(BaseModel):
     env: Literal["demo", "prod"] = "demo"
@@ -64,9 +70,32 @@ class Settings(BaseSettings):
     )
 
     live: bool = False  # Phase 6 gate. Loud on purpose; everything else is paper.
+
+    # SETTLED, not a placeholder. The operator is an Ontario resident, where
+    # Polymarket is under a permanent OSC undertaking not to serve residents.
+    # There is no lawful live-trading path, so Phase 6 is closed by
+    # construction rather than left as a flag someone might flip later.
+    operator_province: str = "ON"
     kalshi: KalshiSettings = KalshiSettings()
     polymarket: PolymarketSettings = PolymarketSettings()
     risk: RiskSettings = RiskSettings()
+
+    @property
+    def live_trading_permitted(self) -> bool:
+        """False in every blocked province. Research and paper trading are
+        unaffected: this gates only the routing of real orders."""
+        return self.operator_province.upper() not in BLOCKED_PROVINCES
+
+    @model_validator(mode="after")
+    def _live_requires_a_permitting_jurisdiction(self) -> Settings:
+        if self.live and not self.live_trading_permitted:
+            raise ValueError(
+                f"live=True is not available in {self.operator_province}: "
+                "Polymarket may not serve residents there (see "
+                "research/jurisdiction.md). Phase 6 is closed; paper trading "
+                "and research are not affected."
+            )
+        return self
 
     @model_validator(mode="after")
     def _no_live_on_demo(self) -> Settings:
@@ -109,9 +138,15 @@ def resolve_eligibility(settings: Settings) -> VenueEligibility:
     inactive = Venue.POLYMARKET_INTL if active is Venue.POLYMARKET_US else Venue.POLYMARKET_US
     if settings.polymarket.enabled:
         enabled.add(active)
+        province = settings.operator_province.upper()
+        trading = (
+            "live trading permitted by jurisdiction"
+            if settings.live_trading_permitted
+            else f"read+research only: live trading not permitted in {province}"
+        )
         reasons[active] = (
             f"enabled via config (platform={settings.polymarket.platform}, "
-            f"chain={settings.polymarket.chain_id})"
+            f"chain={settings.polymarket.chain_id}); {trading}"
         )
     else:
         reasons[active] = "disabled via config"
