@@ -9,10 +9,14 @@ an analytic empirical-Bayes (random-effects) model instead. For the structure
 we actually have — one scalar parameter per cell, each with a bootstrap
 standard error — the normal-normal hierarchical posterior has a closed form,
 so MCMC would sample a distribution we can write down exactly. The tradeoff
-accepted here: no full posterior over (mu, tau), so the pooled interval
-treats tau as known rather than integrating over it, which makes pooled
-intervals mildly optimistic. Tradeability is therefore still decided on the
-UNPOOLED clustered-bootstrap CI, which carries no such assumption.
+accepted here: no full posterior over (mu, tau), so intervals treat tau as
+known rather than integrating over it, which makes them mildly optimistic.
+
+Tradeability therefore never rests on a pooled interval. `CellFit.tradeable`
+requires the UNPOOLED clustered-bootstrap CI to exclude 1 *and* the traded
+slope to still be the cell's own (shrinkage below a threshold), because a
+heavily shrunk cell is trading mu and must be judged on mu's own interval —
+`population_slope_ci` — instead.
 
 Model:
     b_i_hat ~ Normal(b_i, se_i^2)          # sampling error within a cell
