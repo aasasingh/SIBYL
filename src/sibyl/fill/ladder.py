@@ -33,7 +33,7 @@ from __future__ import annotations
 
 import json
 from collections import Counter
-from collections.abc import Iterable, Iterator
+from collections.abc import Callable, Iterable, Iterator
 from dataclasses import dataclass, field
 from datetime import datetime
 from decimal import Decimal, InvalidOperation
@@ -247,6 +247,9 @@ class Replayer:
         # Top-of-book checks deferred to the end of the current WS message.
         self._message: tuple[datetime, int] | None = None
         self._pending: dict[str, LevelChange] = {}
+        # Called as (change, size_before, frame) for every applied delta;
+        # how downstream steps (trade attribution) see the level history.
+        self.listeners: list[Callable[[LevelChange, Decimal, ChangeFrame], None]] = []
 
     def _record(self, m: Mismatch) -> None:
         self.stats.mismatches_by_asset[m.asset_id] += 1
@@ -332,8 +335,13 @@ class Replayer:
             if ladder is None:
                 self.stats.changes_unsynced += 1
                 continue
+            before = (ladder.bids if change.side == "bid" else ladder.asks).get(
+                change.price, Decimal(0)
+            )
             ladder.set_level(change.side, change.price, change.size)
             self.stats.changes_applied += 1
+            for listener in self.listeners:
+                listener(change, before, frame)
             self._pending[change.asset_id] = change
 
 

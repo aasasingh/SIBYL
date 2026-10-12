@@ -71,6 +71,7 @@ uv run sibyl eiv                        # measurement-error attenuation check
 uv run sibyl record                     # record live books+trades (run continuously)
 uv run sibyl coverage                   # uptime + every gap where book state was unknown
 uv run sibyl replay                     # rebuild recorded books, validate vs venue snapshots
+uv run sibyl attribute                  # split book decreases into trades vs cancels
 uv run sibyl power --seeds 80           # what effect size could the test detect?
 uv run sibyl tables                     # regenerate the write-up's figures
 uv run python research/check_figures.py # verify every prose figure against artifacts

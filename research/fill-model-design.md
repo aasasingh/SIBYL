@@ -162,5 +162,48 @@ State is never guessed: deltas for an asset with no snapshot since the last
 reset (coverage boundary, or 20s of global silence) are dropped and counted
 (5,286, all in resync windows).
 
-Step 2 (trade attribution) is next. Steps 4 and 5 need enough
+## Step 2 result: trade attribution (2026-10-12)
+
+`sibyl attribute` (`fill/attribution.py`) splits every replayed size decrease
+into traded and cancelled volume. Measured on ~21h, 37.7k trades, 294k
+decreases:
+
+| measure | value |
+|---|---|
+| trades with volume left unexplained | 23 (0.06%) |
+| ...by volume | 7.3% -- one 90,000-share trade is 99% of it |
+| decrease volume that was traded (rest cancelled) | 0.11% |
+| ambiguous decreases (mixed + contested), share of traded | 1.9% by count |
+| ...weighted by traded notional | **12.4%** |
+
+What the data established, each now a test:
+
+- `side` on `last_trade_price` is the **taker's** side (BUY hit the ask) in
+  every one of 36.8k trades.
+- **Every order sits on both legs** (a YES ask at p is a NO bid at 1-p) but
+  each trade is reported on one leg. All 36.8k had the mirrored decrease;
+  without mirroring, half of all trade volume would read as cancels.
+- The book delta **precedes** the trade message: median -20 ms, 98% within
+  [-387, -16] ms.
+- **Cancels dominate**: 99.9% of volume leaving the book is withdrawn, not
+  traded. Queue advance is mostly by cancellation.
+- The match window has a measured **upper** bound too: one bot buying
+  5 @ 0.002 every ~1 s makes consecutive trades indistinguishable once the
+  window reaches ~1 s ("contested" 1k -> 67k). Primary window 500 ms;
+  leftovers get a 1500 ms fallback, labelled low-confidence.
+
+The 12.4% notional figure is the one to carry forward: ambiguity is
+concentrated in the larger, real trades, not the cent-sized bot. Step 3 must
+resolve it pessimistically and report results with and without the
+ambiguous fills.
+
+## Data finding that changes the plan: the recorder watches the wrong markets
+
+**97.8% of recorded trades are that one bot** (5 shares at 0.002, a cent each).
+Of the 60 markets selected by *lifetime* volume, only 6 had a mid price
+between 0.03 and 0.97; 35 sat at the extremes and 19 had no two-sided book.
+Most are long-dated longshots (2028 nomination markets). The busiest saw 73
+non-bot trades in 20h. A maker simulation needs fills to measure, and this
+selection produces almost none. The selection rule has to change before
+recording more. Steps 4 and 5 need enough
 recorded history to contain real adverse-selection episodes — days, not hours.

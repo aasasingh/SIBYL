@@ -335,6 +335,22 @@ def _replay(args: argparse.Namespace) -> int:
     return 0
 
 
+def _attribute(args: argparse.Namespace) -> int:
+    """Split every recorded size decrease into traded vs cancelled volume."""
+    from sibyl.fill.replay import attribute_recorded
+
+    _, stats, _ = attribute_recorded(
+        args.data_dir, window_ms=args.window_ms, fallback_ms=args.fallback_ms
+    )
+    log.info(
+        "attribute.summary",
+        window_ms=args.window_ms,
+        fallback_ms=args.fallback_ms,
+        **stats.summary(),
+    )
+    return 0
+
+
 def _compact(args: argparse.Namespace) -> int:
     merged = Ledger(args.data_dir).compact(min_parts=args.min_parts)
     log.info("store.compacted", **merged)
@@ -468,6 +484,13 @@ def main() -> None:
     )
     rpl.add_argument("--examples", type=int, default=20, help="mismatches to print")
 
+    att = sub.add_parser("attribute", help="classify recorded book decreases as trades or cancels")
+    att.add_argument("--data-dir", type=Path, default=DEFAULT_DATA_DIR)
+    att.add_argument("--window-ms", type=int, default=500, help="primary trade-match window")
+    att.add_argument(
+        "--fallback-ms", type=int, default=1500, help="wider window for leftovers (low confidence)"
+    )
+
     args = parser.parse_args()
     configure_logging(json_output=args.json)
     if args.command == "status":
@@ -490,6 +513,8 @@ def main() -> None:
         sys.exit(_tables(args))
     elif args.command == "coverage":
         sys.exit(_coverage(args))
+    elif args.command == "attribute":
+        sys.exit(_attribute(args))
     elif args.command == "replay":
         sys.exit(_replay(args))
     elif args.command == "record":
