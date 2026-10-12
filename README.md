@@ -16,7 +16,7 @@ Full design: [SIBYL-build-prompt.md](SIBYL-build-prompt.md).
 | 2 | Historical store & resolution ledger | ✅ |
 | 3 | Calibration engine | ✅ built, run, and **hypothesis killed** — [findings](research/phase3-findings.md) |
 | 4 | Semantic identity graph | 🔻 descoped — cross-venue execution is unavailable |
-| 5 | Alpha, sizing, paper trading | 🔄 recorder running; [fill model designed](research/fill-model-design.md) |
+| 5 | Alpha, sizing, paper trading | 🔄 recorder running w/ coverage; [fill model designed](research/fill-model-design.md) |
 | 6 | Live trading | 🚫 closed by construction (Ontario) |
 
 ### Phase 6 is closed by construction
@@ -69,6 +69,10 @@ uv run sibyl lag                        # measured settlement lag
 uv run sibyl calibrate --out report.txt # fit slopes, walk forward, report honestly
 uv run sibyl eiv                        # measurement-error attenuation check
 uv run sibyl record                     # record live books+trades (run continuously)
+uv run sibyl coverage                   # uptime + every gap where book state was unknown
+uv run sibyl power --seeds 80           # what effect size could the test detect?
+uv run sibyl tables                     # regenerate the write-up's figures
+uv run python research/check_figures.py # verify every prose figure against artifacts
 uv run sibyl compact                    # merge Parquet parts (not while backfilling)
 
 uv run pytest                           # offline suite
@@ -106,6 +110,18 @@ against real data rather than by reading the spec.
   the `/events/keyset` cursor endpoint.
 
 Full, measured caveats: [research/data-limitations.md](research/data-limitations.md).
+
+## Open item: the recorder is not yet durable
+
+`sibyl record` currently runs as a local process. It survives dropped
+connections (logged as coverage gaps) and refreshes its market set daily, but
+it does **not** survive the laptop sleeping or restarting — and the data is
+time-locked, so every hour it is down is unrecoverable.
+
+It should run somewhere that stays on. Reading public market data is not
+trading, so jurisdiction does not block hosting it; confirm the WebSocket is
+reachable from wherever it runs. `uv run sibyl coverage` reports uptime and
+every gap, which is the way to check it is actually working.
 
 ## Configuration
 
