@@ -13,8 +13,22 @@ Why this exists, and why it runs before anything else in Phase 5:
     deltas rather than polling snapshots.
   * The data is time-locked. An hour not recorded is an hour lost.
 
+Three durability properties, each of which matters more than any statistic
+computed downstream:
+
+  1. **Coverage is recorded, not assumed.** Every connection writes a segment
+     to the coverage ledger on close. The gaps between segments are where
+     book state was unknown, and the fill model must refuse to simulate
+     across them rather than interpolate. See `record/coverage.py`.
+  2. **The subscription refreshes.** Markets are picked by liquidity at
+     startup; within a week some have resolved and new liquid markets exist
+     that a long-lived process would never watch. The asset set is
+     re-selected every `refresh_hours` and a new manifest written.
+  3. **Nothing is buffered across a crash for longer than `flush_seconds`.**
+
 The market channel delivers `book` (full ladder snapshot), `price_change`
-(incremental level updates) and trade events. All are stored verbatim.
+(incremental level updates) and `last_trade_price` (executions). All are
+stored verbatim.
 """
 
 from __future__ import annotations
@@ -31,6 +45,7 @@ from typing import Any
 import structlog
 import websockets
 
+from sibyl.record.coverage import CoverageWriter
 from sibyl.record.writer import EventRow, EventWriter
 from sibyl.venues.polymarket import PolymarketReadClient
 
@@ -48,6 +63,7 @@ PING_INTERVAL_S = 20.0
 class RecorderStats:
     events: int = 0
     reconnects: int = 0
+    refreshes: int = 0
     started: datetime = field(default_factory=lambda: datetime.now(UTC))
     last_event: datetime | None = None
     by_type: dict[str, int] = field(default_factory=dict)
@@ -135,6 +151,36 @@ def _rows_from_message(raw: str, recv_ts: datetime) -> list[EventRow]:
     return rows
 
 
+def _write_manifest(
+    data_dir: Path,
+    assets: list[str],
+    manifest: list[dict[str, Any]],
+    version: int,
+    session: str,
+) -> None:
+    """Record which assets were watched from when.
+
+    Without this, an absence of events is ambiguous between "quiet market"
+    and "never subscribed" -- and after a refresh, between "quiet" and "no
+    longer in the subscription".
+    """
+    path = data_dir / "book_events" / f"manifest-{session}-v{version:03d}.json"
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(
+        json.dumps(
+            {
+                "session_id": session,
+                "assets_version": version,
+                "started": datetime.now(UTC).isoformat(),
+                "assets": assets,
+                "markets": manifest,
+            },
+            indent=1,
+        ),
+        encoding="utf-8",
+    )
+
+
 async def record(
     *,
     data_dir: Path,
@@ -144,101 +190,131 @@ async def record(
     flush_every: int = 2000,
     flush_seconds: float = 60.0,
     log_every_s: float = 300.0,
+    refresh_hours: float = 24.0,
 ) -> RecorderStats:
     """Subscribe and record until `hours` elapses (or forever if None).
 
     Reconnects with backoff on any transport failure; a dropped connection
-    costs a gap, not the session.
+    costs a logged gap, not the session. The asset set is re-selected every
+    `refresh_hours`.
     """
     writer = EventWriter(data_dir, flush_every=flush_every)
+    coverage = CoverageWriter(data_dir)
     stats = RecorderStats()
     deadline = None if hours is None else time.monotonic() + hours * 3600
 
-    async with PolymarketReadClient() as client:
-        assets, manifest = await select_assets(client, n_markets=n_markets, max_assets=max_assets)
-    if not assets:
-        raise RuntimeError("no active markets to subscribe to")
-
-    # The manifest records coverage: which assets were watched, from when.
-    # Without it, an absence of events is ambiguous between "quiet market"
-    # and "never subscribed".
-    manifest_path = data_dir / "book_events" / f"manifest-{datetime.now(UTC):%Y%m%dT%H%M%S}.json"
-    manifest_path.parent.mkdir(parents=True, exist_ok=True)
-    manifest_path.write_text(
-        json.dumps(
-            {
-                "started": datetime.now(UTC).isoformat(),
-                "assets": assets,
-                "markets": manifest,
-            },
-            indent=1,
-        ),
-        encoding="utf-8",
+    log.info(
+        "record.start",
+        session=coverage.session_id,
+        hours=hours,
+        refresh_hours=refresh_hours,
+        data_dir=str(data_dir),
     )
-    log.info("record.start", assets=len(assets), markets=len(manifest), hours=hours)
-
+    assets_version = 0
     backoff = 1.0
-    last_flush = time.monotonic()
-    last_log = time.monotonic()
     try:
         while deadline is None or time.monotonic() < deadline:
-            try:
-                async with websockets.connect(
-                    WS_URL, open_timeout=20, ping_interval=PING_INTERVAL_S
-                ) as ws:
-                    await ws.send(json.dumps({"assets_ids": assets, "type": "market"}))
-                    backoff = 1.0
-                    while deadline is None or time.monotonic() < deadline:
-                        try:
-                            raw = await asyncio.wait_for(ws.recv(), timeout=RECV_TIMEOUT_S)
-                        except TimeoutError:
-                            # Silence is normal; the library's pings police
-                            # liveness. Flush what we have and keep waiting.
-                            writer.flush()
-                            last_flush = time.monotonic()
-                            continue
-                        now = datetime.now(UTC)
-                        text = raw if isinstance(raw, str) else raw.decode()
-                        for row in _rows_from_message(text, now):
-                            writer.add(row)
-                            stats.events += 1
-                            stats.by_type[row.event_type] = stats.by_type.get(row.event_type, 0) + 1
-                        stats.last_event = now
-                        if time.monotonic() - last_flush > flush_seconds:
-                            writer.flush()
-                            last_flush = time.monotonic()
-                        if time.monotonic() - last_log > log_every_s:
-                            log.info(
-                                "record.progress",
-                                events=stats.events,
-                                rows_on_disk=writer.rows_written,
-                                buffered=writer.buffered,
-                                reconnects=stats.reconnects,
-                                types=dict(sorted(stats.by_type.items())),
-                            )
-                            last_log = time.monotonic()
-            except asyncio.CancelledError:
-                raise
-            except Exception as exc:
-                writer.flush()
-                stats.reconnects += 1
-                log.warning(
-                    "record.reconnect",
-                    error=f"{type(exc).__name__}: {exc}",
-                    attempt=stats.reconnects,
-                    sleep=backoff,
+            # --- (re)select the asset set ---------------------------------
+            async with PolymarketReadClient() as client:
+                assets, manifest = await select_assets(
+                    client, n_markets=n_markets, max_assets=max_assets
                 )
-                await asyncio.sleep(backoff)
-                backoff = min(backoff * 2, 60.0)
+            if not assets:
+                raise RuntimeError("no active markets to subscribe to")
+            assets_version += 1
+            _write_manifest(data_dir, assets, manifest, assets_version, coverage.session_id)
+            if assets_version > 1:
+                stats.refreshes += 1
+            log.info(
+                "record.subscription",
+                version=assets_version,
+                assets=len(assets),
+                markets=len(manifest),
+            )
+
+            refresh_at = time.monotonic() + refresh_hours * 3600
+            cycle_end = refresh_at if deadline is None else min(refresh_at, deadline)
+
+            # --- hold a connection until refresh or deadline --------------
+            while time.monotonic() < cycle_end:
+                segment = coverage.open_segment(assets_version=assets_version, n_assets=len(assets))
+                events_at_open = stats.events
+                reason, detail = "shutdown", ""
+                last_flush = time.monotonic()
+                last_log = time.monotonic()
+                try:
+                    async with websockets.connect(
+                        WS_URL, open_timeout=20, ping_interval=PING_INTERVAL_S
+                    ) as ws:
+                        await ws.send(json.dumps({"assets_ids": assets, "type": "market"}))
+                        backoff = 1.0
+                        while time.monotonic() < cycle_end:
+                            try:
+                                raw = await asyncio.wait_for(ws.recv(), timeout=RECV_TIMEOUT_S)
+                            except TimeoutError:
+                                # Silence is normal; the library's pings
+                                # police liveness. Flush and keep waiting.
+                                writer.flush()
+                                last_flush = time.monotonic()
+                                continue
+                            now = datetime.now(UTC)
+                            text = raw if isinstance(raw, str) else raw.decode()
+                            for row in _rows_from_message(text, now):
+                                writer.add(row)
+                                stats.events += 1
+                                stats.by_type[row.event_type] = (
+                                    stats.by_type.get(row.event_type, 0) + 1
+                                )
+                            stats.last_event = now
+                            if time.monotonic() - last_flush > flush_seconds:
+                                writer.flush()
+                                last_flush = time.monotonic()
+                            if time.monotonic() - last_log > log_every_s:
+                                log.info(
+                                    "record.progress",
+                                    events=stats.events,
+                                    rows_on_disk=writer.rows_written,
+                                    buffered=writer.buffered,
+                                    reconnects=stats.reconnects,
+                                    refreshes=stats.refreshes,
+                                    types=dict(sorted(stats.by_type.items())),
+                                )
+                                last_log = time.monotonic()
+                        reason = "refresh" if time.monotonic() >= refresh_at else "deadline"
+                except asyncio.CancelledError:
+                    reason, detail = "shutdown", "cancelled"
+                    raise
+                except Exception as exc:
+                    reason, detail = "error", f"{type(exc).__name__}: {exc}"
+                    stats.reconnects += 1
+                finally:
+                    writer.flush()
+                    coverage.close_segment(
+                        segment,
+                        reason=reason,
+                        detail=detail,
+                        n_events=stats.events - events_at_open,
+                    )
+                if reason == "error":
+                    log.warning(
+                        "record.reconnect",
+                        error=detail,
+                        attempt=stats.reconnects,
+                        sleep=backoff,
+                    )
+                    await asyncio.sleep(backoff)
+                    backoff = min(backoff * 2, 60.0)
     finally:
         with contextlib.suppress(Exception):
             writer.flush()
         log.info(
             "record.stop",
+            session=coverage.session_id,
             events=stats.events,
             rows_on_disk=writer.rows_written,
             parts=writer.parts_written,
             reconnects=stats.reconnects,
+            refreshes=stats.refreshes,
             types=dict(sorted(stats.by_type.items())),
         )
     return stats

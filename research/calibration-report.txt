@@ -97,11 +97,11 @@ TRADEABLE CELLS: 4 of 63
 
 WALK-FORWARD OUT-OF-SAMPLE (expanding window, split on market close)
 ----------------------------------------------------------------------------------------------------
-  fold  train_mkts  test_mkts  brier_model  brier_raw   improvement 
-  0     818         391        0.086083     0.068416    -0.017668   
-  1     1209        258        0.120694     0.103355    -0.017339   
-  2     1467        274        0.103078     0.109519    +0.006441   
-  3     1741        235        0.087649     0.104249    +0.016600   
+  fold  train_mkts  test_mkts  tr_evts  te_evts  brier_model  brier_raw   improvement 
+  0     818         391        243      91       0.086083     0.068416    -0.017668   
+  1     1209        258        334      91       0.120694     0.103355    -0.017339   
+  2     1467        274        425      91       0.103078     0.109519    +0.006441   
+  3     1741        235        516      91       0.087649     0.104249    +0.016600   
 
   mean improvement over raw price: -0.002992 (2/4 folds positive)
   VERDICT: NO out-of-sample improvement — the raw price is not reliably beaten

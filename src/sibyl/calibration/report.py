@@ -29,6 +29,79 @@ def build_report(
     return pooled, mu, tau, folds, render(rows, pooled, mu, tau, folds, mu_ci)
 
 
+def to_json(
+    rows: Rows,
+    cells: list[CellFit],
+    mu: float,
+    tau: float,
+    folds: list[FoldResult],
+    mu_ci: tuple[float, float] | None = None,
+) -> dict[str, object]:
+    """Structured artifact for `sibyl tables`, so no figure is hand-typed."""
+    with_ci = [c for c in cells if c.slope_ci is not None]
+    improvements = [f.improvement for f in folds]
+    return {
+        "n_rows": len(rows),
+        "n_markets": int(np.unique(rows.market_id).size),
+        "n_clusters": int(np.unique(rows.clusters).size),
+        "n_cells": len(cells),
+        "n_cells_with_ci": len(with_ci),
+        "expected_false_positives": 0.05 * len(with_ci),
+        "mu": mu,
+        "mu_ci": list(mu_ci) if mu_ci else None,
+        "tau": tau,
+        "mean_improvement": float(np.mean(improvements)) if improvements else None,
+        "folds_positive": sum(1 for i in improvements if i > 0),
+        "cells": [
+            {
+                "domain": c.domain,
+                "horizon": c.horizon,
+                "n_rows": c.n_rows,
+                "n_markets": c.n_markets,
+                "n_clusters": c.n_clusters,
+                "slope": c.slope,
+                "intercept": c.intercept,
+                "slope_ci": list(c.slope_ci) if c.slope_ci else None,
+                "effective_slope": c.effective_slope,
+                "pooled_slope": c.pooled_slope,
+                "shrinkage": c.shrinkage,
+                "tradeable": c.tradeable,
+                "gating_note": c.gating_note,
+                "brier_improvement": c.brier_improvement,
+                "converged": c.converged,
+                "note": c.note,
+            }
+            for c in cells
+        ],
+        "folds": [
+            {
+                "fold": f.fold,
+                "train_markets": f.train_markets,
+                "test_markets": f.test_markets,
+                "train_clusters": f.train_clusters,
+                "test_clusters": f.test_clusters,
+                "brier_model": f.brier_model,
+                "brier_baseline": f.brier_baseline,
+                "improvement": f.improvement,
+            }
+            for f in folds
+        ],
+        "reliability": [
+            {
+                "bin_mid": b.bin_mid,
+                "mean_price": b.mean_price,
+                "observed_row": b.observed,
+                "gap_row": b.gap,
+                "observed_market": b.observed_market_level,
+                "gap_market": b.gap_market_level,
+                "n_rows": b.n_rows,
+                "n_markets": b.n_markets,
+            }
+            for b in reliability_table(rows.price, rows.y, rows.market_id)
+        ],
+    }
+
+
 def render(
     rows: Rows,
     cells: list[CellFit],

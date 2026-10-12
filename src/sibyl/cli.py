@@ -102,13 +102,23 @@ def _calibrate(args: argparse.Namespace) -> int:
     if len(rows) == 0:
         log.error("calibrate.no_data", hint="run `sibyl backfill --price-markets N` first")
         return 1
-    _cells, _mu, _tau, _folds, lines = build_report(rows, n_boot=args.n_boot, n_folds=args.n_folds)
+    cells, mu, tau, folds, lines = build_report(rows, n_boot=args.n_boot, n_folds=args.n_folds)
     text = "\n".join(lines)
     sys.stdout.write(text + "\n")
     if args.out is not None:
         args.out.parent.mkdir(parents=True, exist_ok=True)
         args.out.write_text(text + "\n", encoding="utf-8")
         log.info("calibrate.written", path=str(args.out))
+    if args.json_out is not None:
+        import json
+
+        from sibyl.calibration.hierarchical import population_slope_ci
+        from sibyl.calibration.report import to_json
+
+        args.json_out.parent.mkdir(parents=True, exist_ok=True)
+        payload = to_json(rows, cells, mu, tau, folds, population_slope_ci(cells))
+        args.json_out.write_text(json.dumps(payload, indent=1), encoding="utf-8")
+        log.info("calibrate.json_written", path=str(args.json_out))
     return 0
 
 
@@ -159,6 +169,104 @@ def _eiv(args: argparse.Namespace) -> int:
     return 0
 
 
+def _power(args: argparse.Namespace) -> int:
+    """Multi-seed power curve for the walk-forward test."""
+    import numpy as np
+
+    from sibyl.calibration.dataset import load_rows
+    from sibyl.calibration.eiv import estimate_noise
+    from sibyl.calibration.power import (
+        expected_noise_floor,
+        power_curve,
+        smallest_detectable_slope,
+    )
+
+    noise_sd = args.noise_sd
+    if noise_sd is None:
+        rows = load_rows(Ledger(args.data_dir))
+        measured = estimate_noise(rows.price, rows.market_id) if len(rows) else None
+        noise_sd = float(np.sqrt(measured.sigma2_noise)) if measured else 0.0
+        log.info("power.noise_from_data", noise_sd=round(noise_sd, 4))
+
+    lines = [
+        "=" * 96,
+        f"WALK-FORWARD POWER  ({args.seeds} seeds/condition, {args.folds} folds, "
+        f"noise sd {noise_sd:.3f})",
+        "Decision rule is the report's own: mean improvement > 0 AND >half the folds positive.",
+        "=" * 96,
+    ]
+    results = power_curve(
+        noise_sd=noise_sd, n_seeds=args.seeds, n_folds=args.folds, n_boot=args.boot
+    )
+    lines.extend("  " + r.describe() for r in results)
+    floor = expected_noise_floor(results)
+    smallest = smallest_detectable_slope(results, threshold=args.threshold)
+    lines += [
+        "",
+        f"  null-condition mean improvement (noise floor): {floor:+.6f}"
+        if floor is not None
+        else "  null condition not tested",
+        f"  smallest slope detected at >= {args.threshold:.0%} power: "
+        + (f"b = {smallest:.2f}" if smallest is not None else "NONE of the tested slopes"),
+        "=" * 96,
+    ]
+    text = "\n".join(lines)
+    sys.stdout.write(text + "\n")
+    if args.out is not None:
+        args.out.parent.mkdir(parents=True, exist_ok=True)
+        args.out.write_text(text + "\n", encoding="utf-8")
+        log.info("power.written", path=str(args.out))
+    if args.json_out is not None:
+        import json
+
+        args.json_out.parent.mkdir(parents=True, exist_ok=True)
+        payload = {
+            "n_seeds": args.seeds,
+            "n_folds": args.folds,
+            "noise_sd": noise_sd,
+            "threshold": args.threshold,
+            "smallest_detectable": smallest,
+            "noise_floor": floor,
+            "conditions": [
+                {
+                    "true_slope": r.true_slope,
+                    "noise_sd": r.noise_sd,
+                    "n_seeds": r.n_seeds,
+                    "detections": r.detections,
+                    "detection_rate": r.detection_rate,
+                    "mean_fitted_slope": r.mean_fitted_slope,
+                    "mean_improvement": r.mean_improvement,
+                    "improvement_sd": r.improvement_sd,
+                    "is_null": r.is_null,
+                }
+                for r in results
+            ],
+        }
+        args.json_out.write_text(json.dumps(payload, indent=1), encoding="utf-8")
+        log.info("power.json_written", path=str(args.json_out))
+    return 0
+
+
+def _tables(args: argparse.Namespace) -> int:
+    """Inject generated tables into the write-up. No figure is hand-typed."""
+    from sibyl.calibration.tables import inject, load_artifact
+
+    artifacts = {}
+    if args.calibration.exists():
+        artifacts["calibration"] = load_artifact(args.calibration)
+    if args.power.exists():
+        artifacts["power"] = load_artifact(args.power)
+    if not artifacts:
+        log.error(
+            "tables.no_artifacts",
+            hint="run `sibyl calibrate --json-out` and `sibyl power --json-out` first",
+        )
+        return 1
+    updated = inject(args.findings, artifacts)
+    log.info("tables.injected", document=str(args.findings), blocks=updated)
+    return 0
+
+
 def _lag(args: argparse.Namespace) -> int:
     from sibyl.store.resolutions import early_resolution_rate, resolution_lag
 
@@ -186,7 +294,27 @@ async def _record(args: argparse.Namespace) -> int:
         hours=args.hours,
         n_markets=args.markets,
         max_assets=args.max_assets,
+        refresh_hours=args.refresh_hours,
     )
+    return 0
+
+
+def _coverage(args: argparse.Namespace) -> int:
+    """Where was book state unknown? The fill model must not cross these."""
+    from sibyl.record.coverage import coverage_summary, find_gaps
+
+    summary = coverage_summary(args.data_dir)
+    log.info("coverage.summary", **summary)
+    gaps = find_gaps(args.data_dir, min_seconds=args.min_seconds)
+    for start, end, seconds in gaps[: args.limit]:
+        log.info(
+            "coverage.gap",
+            start=start.isoformat(),
+            end=end.isoformat(),
+            seconds=round(seconds, 2),
+        )
+    if len(gaps) > args.limit:
+        log.info("coverage.gaps_truncated", shown=args.limit, total=len(gaps))
     return 0
 
 
@@ -252,9 +380,32 @@ def main() -> None:
     calibrate.add_argument("--max-horizon-days", type=float, default=400.0)
     calibrate.add_argument("--exclude-domains", nargs="*", default=[])
     calibrate.add_argument("--out", type=Path, default=None, help="also write the report here")
+    calibrate.add_argument(
+        "--json-out",
+        type=Path,
+        default=None,
+        help="structured artifact for `sibyl tables` (keeps write-up figures generated)",
+    )
 
     lag = sub.add_parser("lag", help="measured settlement lag (basis for capital buffers)")
     lag.add_argument("--data-dir", type=Path, default=DEFAULT_DATA_DIR)
+
+    power = sub.add_parser(
+        "power", help="multi-seed power curve: what slope could this test have detected?"
+    )
+    power.add_argument("--data-dir", type=Path, default=DEFAULT_DATA_DIR)
+    power.add_argument("--seeds", type=int, default=60, help="simulations per condition")
+    power.add_argument("--folds", type=int, default=4)
+    power.add_argument("--boot", type=int, default=40)
+    power.add_argument("--threshold", type=float, default=0.80, help="power target")
+    power.add_argument(
+        "--noise-sd",
+        type=float,
+        default=None,
+        help="logit-space measurement noise (default: measured from the ledger)",
+    )
+    power.add_argument("--out", type=Path, default=None)
+    power.add_argument("--json-out", type=Path, default=None)
 
     eiv = sub.add_parser("eiv", help="measurement-error attenuation: is the tape hiding a slope?")
     eiv.add_argument("--data-dir", type=Path, default=DEFAULT_DATA_DIR)
@@ -269,6 +420,24 @@ def main() -> None:
     )
     rec.add_argument("--markets", type=int, default=60, help="most-liquid active markets to watch")
     rec.add_argument("--max-assets", type=int, default=150, help="cap on subscribed token ids")
+    rec.add_argument(
+        "--refresh-hours",
+        type=float,
+        default=24.0,
+        help="re-select the liquid market set this often (resolved markets drop out)",
+    )
+
+    tbl = sub.add_parser(
+        "tables", help="regenerate the write-up's numeric tables from run artifacts"
+    )
+    tbl.add_argument("--findings", type=Path, default=Path("research/phase3-findings.md"))
+    tbl.add_argument("--calibration", type=Path, default=Path("research/calibration.json"))
+    tbl.add_argument("--power", type=Path, default=Path("research/power.json"))
+
+    cov = sub.add_parser("coverage", help="recorded-coverage segments and the gaps between them")
+    cov.add_argument("--data-dir", type=Path, default=DEFAULT_DATA_DIR)
+    cov.add_argument("--min-seconds", type=float, default=1.0, help="ignore gaps below this")
+    cov.add_argument("--limit", type=int, default=25)
 
     args = parser.parse_args()
     configure_logging(json_output=args.json)
@@ -284,8 +453,14 @@ def main() -> None:
         sys.exit(_calibrate(args))
     elif args.command == "lag":
         sys.exit(_lag(args))
+    elif args.command == "power":
+        sys.exit(_power(args))
     elif args.command == "eiv":
         sys.exit(_eiv(args))
+    elif args.command == "tables":
+        sys.exit(_tables(args))
+    elif args.command == "coverage":
+        sys.exit(_coverage(args))
     elif args.command == "record":
         sys.exit(asyncio.run(_record(args)))
 

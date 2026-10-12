@@ -37,3 +37,7 @@ backfill_run.log
 
 # Recorder logs
 record_run.log
+
+# Power-run logs
+power_run.log
+data/coverage/
