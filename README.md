@@ -16,7 +16,7 @@ Full design: [SIBYL-build-prompt.md](SIBYL-build-prompt.md).
 | 2 | Historical store & resolution ledger | ✅ |
 | 3 | Calibration engine | ✅ built, run, and **hypothesis killed** — [findings](research/phase3-findings.md) |
 | 4 | Semantic identity graph | 🔻 descoped — cross-venue execution is unavailable |
-| 5 | Alpha, sizing, paper trading | 🔄 recorder running w/ coverage; [fill model designed](research/fill-model-design.md) |
+| 5 | Alpha, sizing, paper trading | 🔄 recorder running w/ coverage; [fill model](research/fill-model-design.md) step 1 (book replay) validated at 99.98% |
 | 6 | Live trading | 🚫 closed by construction (Ontario) |
 
 ### Phase 6 is closed by construction
@@ -70,6 +70,7 @@ uv run sibyl calibrate --out report.txt # fit slopes, walk forward, report hones
 uv run sibyl eiv                        # measurement-error attenuation check
 uv run sibyl record                     # record live books+trades (run continuously)
 uv run sibyl coverage                   # uptime + every gap where book state was unknown
+uv run sibyl replay                     # rebuild recorded books, validate vs venue snapshots
 uv run sibyl power --seeds 80           # what effect size could the test detect?
 uv run sibyl tables                     # regenerate the write-up's figures
 uv run python research/check_figures.py # verify every prose figure against artifacts

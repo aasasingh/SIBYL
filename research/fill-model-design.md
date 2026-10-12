@@ -129,5 +129,38 @@ A maker simulation should be reported with, at minimum:
    at t+1m/5m/1h.
 5. Only then: a maker strategy to run through it.
 
-Step 1 is testable against recorded data today. Steps 4 and 5 need enough
+## Step 1 result: the replay is validated (2026-10-12)
+
+`sibyl replay` (`fill/ladder.py`, `fill/replay.py`) rebuilds every recorded
+ladder and checks it two ways. On ~20h of recordings (2026-10-11 18:20 to
+2026-10-12 14:48, 120 assets):
+
+| check | count | agreement |
+|---|---|---|
+| replayed ladder vs next full `book` snapshot, every level | 73,338 | 99.981% |
+| ...of which disagree at the touch | 0 | — |
+| replayed best bid/ask vs venue's own, per WS message | 483,166 | 99.9996% |
+
+Every snapshot mismatch but one sits at a recorder process start: 22:46:37
+(the restart whose coverage segment was lost before heartbeats existed) and
+14:42:51 (a deliberate hand-over where two recorders briefly interleaved).
+Within a running session: 1 deep-book snapshot mismatch and 2 transient
+top-of-book mismatches in ~556k checks.
+
+Two things learned by running it, both now encoded in tests:
+
+- **The venue's best bid/ask is per *message*, not per event.** A crossing
+  order arrives as two `price_change` events in one frame -- the new ask,
+  then the consumed bid removed -- and both report the touch after the whole
+  message. Checking per event flagged 0.988/0.988 locked books that never
+  existed.
+- **Duplicate recordings are real.** Overlapping recorders store every event
+  twice; replay dedupes by payload hash. This matters more for step 2: a
+  duplicated trade would double-count consumption.
+
+State is never guessed: deltas for an asset with no snapshot since the last
+reset (coverage boundary, or 20s of global silence) are dropped and counted
+(5,286, all in resync windows).
+
+Step 2 (trade attribution) is next. Steps 4 and 5 need enough
 recorded history to contain real adverse-selection episodes — days, not hours.

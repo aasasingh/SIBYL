@@ -318,6 +318,23 @@ def _coverage(args: argparse.Namespace) -> int:
     return 0
 
 
+def _replay(args: argparse.Namespace) -> int:
+    """Rebuild every recorded book and check it against the venue's own claims."""
+    from sibyl.fill.replay import replay
+
+    stats = replay(args.data_dir, silence_s=args.silence_s, max_examples=args.examples)
+    log.info("replay.summary", **stats.summary())
+    for m in stats.examples:
+        log.info(
+            "replay.mismatch",
+            kind=m.kind,
+            recv_ts=m.recv_ts.isoformat(),
+            asset=m.asset_id[:12],
+            detail=m.detail,
+        )
+    return 0
+
+
 def _compact(args: argparse.Namespace) -> int:
     merged = Ledger(args.data_dir).compact(min_parts=args.min_parts)
     log.info("store.compacted", **merged)
@@ -439,6 +456,18 @@ def main() -> None:
     cov.add_argument("--min-seconds", type=float, default=1.0, help="ignore gaps below this")
     cov.add_argument("--limit", type=int, default=25)
 
+    rpl = sub.add_parser(
+        "replay", help="rebuild recorded order books and validate them against the venue"
+    )
+    rpl.add_argument("--data-dir", type=Path, default=DEFAULT_DATA_DIR)
+    rpl.add_argument(
+        "--silence-s",
+        type=float,
+        default=20.0,
+        help="treat a stream silence this long as a disconnect (state reset)",
+    )
+    rpl.add_argument("--examples", type=int, default=20, help="mismatches to print")
+
     args = parser.parse_args()
     configure_logging(json_output=args.json)
     if args.command == "status":
@@ -461,6 +490,8 @@ def main() -> None:
         sys.exit(_tables(args))
     elif args.command == "coverage":
         sys.exit(_coverage(args))
+    elif args.command == "replay":
+        sys.exit(_replay(args))
     elif args.command == "record":
         sys.exit(asyncio.run(_record(args)))
 
