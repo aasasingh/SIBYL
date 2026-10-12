@@ -257,7 +257,9 @@ async def record(
     hours: float | None = None,
     n_markets: int = 60,
     max_assets: int = 150,
-    flush_every: int = 2000,
+    # Large enough that `flush_seconds` governs: at ~300 events/s on active
+    # markets a 2000-row trigger wrote ~17k part files a day.
+    flush_every: int = 50_000,
     flush_seconds: float = 60.0,
     log_every_s: float = 300.0,
     refresh_hours: float = 6.0,

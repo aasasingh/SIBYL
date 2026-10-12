@@ -205,5 +205,46 @@ between 0.03 and 0.97; 35 sat at the extremes and 19 had no two-sided book.
 Most are long-dated longshots (2028 nomination markets). The busiest saw 73
 non-bot trades in 20h. A maker simulation needs fills to measure, and this
 selection produces almost none. The selection rule has to change before
-recording more. Steps 4 and 5 need enough
+recording more.
+
+Changed 2026-10-12 15:08 (commit d261651): rank by 24h volume, mid in
+[0.05, 0.95], accepting orders, at most 3 markets per event, refresh every
+6h. The new set runs ~300 events/s, ~80x the old rate.
+
+## Step 3 result: the queue simulator (2026-10-12)
+
+`sibyl probe` (`fill/queue.py`) rides simulated orders along the replay. The
+probe is not a strategy: every 60 s it joins the touch on both sides of all
+120 books for 5 minutes. First 20 minutes of the new market set, 3,600-3,840
+probes, 250 ms latency:
+
+| variant | cancels at our level | ambiguous volume | fill rate |
+|---|---|---|---|
+| pessimistic (default) | behind us first | cancel | 14.4% |
+| pro_rata | proportional | trade | 15.0% |
+| optimistic_queue | ahead of us first | trade | 15.9% |
+| fill_on_touch | (no queue) | trade | **27.1%** |
+
+Reading it:
+
+- **Naive fill-on-touch nearly doubles the fill rate.** That gap is the
+  size of the error the design doc set out to avoid.
+- **The queue is deep.** Median visible size ahead at join: ~6,800 shares.
+  With nobody joining behind, a trade can never exceed what is ahead (the
+  whole level), so a back-of-queue order fills at its level only when
+  later arrivals give a taker more to eat than the queue ahead.
+- **Most pessimistic fills are crosses (430 of 560)**: the size ahead of us
+  vanished and an opposite order arrived at our price. That is the market
+  moving onto the order -- exactly the adverse-selection case step 4 must
+  price. Queue fills were 80, trade-throughs 50.
+- **Latency barely moves fill rate** at a 5-minute horizon (0 ms: 14.7%,
+  1000 ms: 14.9%). It will matter for markouts, which are measured seconds
+  after the fill.
+- **Latency cannot be measured on this machine.** Receive-minus-venue time
+  drifts ~1 ms/min with a tight p95 regardless of load, and stepped from
+  ~0.4 s to ~1.0 s across a restart: local clock offset, not network delay.
+  `latency_ms` is an assumption and is swept.
+
+Twenty minutes is a mechanics check, not a result. Step 4 (markouts) needs
+days of the new market set. Steps 4 and 5 need enough
 recorded history to contain real adverse-selection episodes — days, not hours.

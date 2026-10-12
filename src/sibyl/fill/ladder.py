@@ -250,6 +250,9 @@ class Replayer:
         # Called as (change, size_before, frame) for every applied delta;
         # how downstream steps (trade attribution) see the level history.
         self.listeners: list[Callable[[LevelChange, Decimal, ChangeFrame], None]] = []
+        # Called after state is replaced (snapshot) or discarded (reset).
+        self.snapshot_listeners: list[Callable[[BookSnapshot], None]] = []
+        self.reset_listeners: list[Callable[[Reset], None]] = []
 
     def _record(self, m: Mismatch) -> None:
         self.stats.mismatches_by_asset[m.asset_id] += 1
@@ -263,6 +266,8 @@ class Replayer:
         if isinstance(event, Reset):
             self.ladders.clear()
             self.stats.resets += 1
+            for on_reset in self.reset_listeners:
+                on_reset(event)
         elif isinstance(event, BookSnapshot):
             self._on_book(event)
         else:
@@ -327,6 +332,8 @@ class Replayer:
                 )
         # Re-sync either way: a known error must not propagate.
         self.ladders[snap.asset_id] = Ladder.from_snapshot(snap)
+        for on_snapshot in self.snapshot_listeners:
+            on_snapshot(snap)
 
     def _on_frame(self, frame: ChangeFrame) -> None:
         self.stats.frames += 1

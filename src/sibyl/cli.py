@@ -351,6 +351,33 @@ def _attribute(args: argparse.Namespace) -> int:
     return 0
 
 
+def _probe(args: argparse.Namespace) -> int:
+    """Run touch-joining probe orders through every fill-rule variant."""
+    from datetime import datetime
+
+    from sibyl.fill.queue import summarise
+    from sibyl.fill.replay import probe_orders, simulate_recorded, venue_time_range
+
+    start = datetime.fromisoformat(args.start) if args.start else None
+    span = venue_time_range(args.data_dir, start=start)
+    if span is None:
+        log.error("probe.no_data")
+        return 1
+    orders = probe_orders(
+        args.data_dir,
+        start_ms=span[0],
+        end_ms=span[1],
+        every_s=args.every_s,
+        life_s=args.life_s,
+    )
+    results = simulate_recorded(args.data_dir, orders, latency_ms=args.latency_ms, start=start)
+    for name, states in results.items():
+        log.info(
+            "probe.summary", variant=name, latency_ms=args.latency_ms, **summarise(states).as_dict()
+        )
+    return 0
+
+
 def _compact(args: argparse.Namespace) -> int:
     merged = Ledger(args.data_dir).compact(min_parts=args.min_parts)
     log.info("store.compacted", **merged)
@@ -493,6 +520,17 @@ def main() -> None:
         "--fallback-ms", type=int, default=1500, help="wider window for leftovers (low confidence)"
     )
 
+    prb = sub.add_parser(
+        "probe", help="simulate touch-joining probe orders under every fill-rule variant"
+    )
+    prb.add_argument("--data-dir", type=Path, default=DEFAULT_DATA_DIR)
+    prb.add_argument("--start", default=None, help="ISO time; only replay data received after it")
+    prb.add_argument("--every-s", type=float, default=300.0, help="probe cadence per book side")
+    prb.add_argument("--life-s", type=float, default=300.0, help="how long each probe rests")
+    prb.add_argument(
+        "--latency-ms", type=int, default=250, help="assumed order latency (place and cancel)"
+    )
+
     args = parser.parse_args()
     configure_logging(json_output=args.json)
     if args.command == "status":
@@ -515,6 +553,8 @@ def main() -> None:
         sys.exit(_tables(args))
     elif args.command == "coverage":
         sys.exit(_coverage(args))
+    elif args.command == "probe":
+        sys.exit(_probe(args))
     elif args.command == "attribute":
         sys.exit(_attribute(args))
     elif args.command == "replay":

@@ -18,6 +18,7 @@ from collections.abc import Iterator
 from datetime import datetime
 from decimal import Decimal
 from pathlib import Path
+from typing import Any
 
 import duckdb
 
@@ -38,6 +39,7 @@ from sibyl.fill.ladder import (
     parse_event,
     with_resets,
 )
+from sibyl.fill.queue import Order, OrderState, QueueSimulator, attribution_index
 from sibyl.record.coverage import _connect as _coverage_connect
 
 
@@ -182,3 +184,94 @@ def attribute_recorded(
         fallback_ms=fallback_ms,
     )
     return attributed, stats, replay_stats
+
+
+def probe_orders(
+    root: Path,
+    *,
+    start_ms: int,
+    end_ms: int,
+    every_s: float = 300.0,
+    life_s: float = 300.0,
+    size: Decimal = Decimal(10),
+) -> list[Order]:
+    """Join the touch on both sides of every subscribed asset at a fixed cadence.
+
+    Not a strategy: a probe that measures what the queue rules imply for the
+    simplest possible resting order. The asset set at each probe time is the
+    manifest in force then, so probes never target unsubscribed books.
+    """
+    manifests: list[tuple[int, list[str]]] = []
+    for path in (root / "book_events").glob("manifest-*.json"):
+        m = json.loads(path.read_text(encoding="utf-8"))
+        started = int(datetime.fromisoformat(m["started"]).timestamp() * 1000)
+        manifests.append((started, [str(a) for a in m.get("assets", [])]))
+    manifests.sort()
+    every, life = int(every_s * 1000), int(life_s * 1000)
+    orders: list[Order] = []
+    t = start_ms + every
+    while t + life <= end_ms:
+        current = [assets for started, assets in manifests if started <= t]
+        for asset in current[-1] if current else []:
+            for side in ("bid", "ask"):
+                orders.append(Order(f"{asset[:10]}-{side}-{t}", asset, side, size, t, t + life))
+        t += every
+    return orders
+
+
+def venue_time_range(
+    root: Path, *, start: datetime | None = None, end: datetime | None = None
+) -> tuple[int, int] | None:
+    events_dir = root / "book_events"
+    if not any(events_dir.glob("part-*.parquet")):
+        return None
+    pattern = (events_dir / "part-*.parquet").as_posix()
+    where, params = ["venue_ts > 0"], []
+    if start is not None:
+        where.append("recv_ts >= ?")
+        params.append(start)
+    if end is not None:
+        where.append("recv_ts < ?")
+        params.append(end)
+    with duckdb.connect() as con:
+        row = con.execute(
+            f"SELECT min(venue_ts), max(venue_ts) FROM read_parquet('{pattern}') "
+            f"WHERE {' AND '.join(where)}",
+            params,
+        ).fetchone()
+    if row is None or row[0] is None:
+        return None
+    return int(row[0]), int(row[1])
+
+
+# The pessimistic default and the alternatives the design doc says to report
+# beside it. If a result only survives the last two, that is the finding.
+VARIANTS: dict[str, dict[str, Any]] = {
+    "pessimistic": {"cancel_rule": "back", "ambiguous_as": "cancel"},
+    "pro_rata": {"cancel_rule": "pro_rata", "ambiguous_as": "trade"},
+    "optimistic_queue": {"cancel_rule": "front", "ambiguous_as": "trade"},
+    "fill_on_touch": {"touch": True, "ambiguous_as": "trade"},
+}
+
+
+def simulate_recorded(
+    root: Path,
+    orders: list[Order],
+    *,
+    latency_ms: int = 250,
+    variants: dict[str, dict[str, Any]] | None = None,
+    start: datetime | None = None,
+    end: datetime | None = None,
+) -> dict[str, list[OrderState]]:
+    """Attribute, then replay once with one simulator per variant attached."""
+    attributed, _, _ = attribute_recorded(root, start=start, end=end)
+    index = attribution_index(attributed)
+    replayer = Replayer()
+    sims = {
+        name: QueueSimulator(replayer, orders, index, latency_ms=latency_ms, **kwargs)
+        for name, kwargs in (variants or VARIANTS).items()
+    }
+    replay(root, start=start, end=end, replayer=replayer)
+    for sim in sims.values():
+        sim.finish()
+    return {name: sim.states for name, sim in sims.items()}
