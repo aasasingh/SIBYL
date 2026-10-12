@@ -116,7 +116,10 @@ Full, measured caveats: [research/data-limitations.md](research/data-limitations
 `sibyl record` currently runs as a local process. It survives dropped
 connections (logged as coverage gaps) and refreshes its market set daily, but
 it does **not** survive the laptop sleeping or restarting — and the data is
-time-locked, so every hour it is down is unrecoverable.
+time-locked, so every hour it is down is unrecoverable. What *is* now
+crash-safe is the record of the outage: each segment is written on connect
+and heartbeated every minute, so a hard kill or sleep still shows up in
+`sibyl coverage` as a gap starting at the last heartbeat.
 
 It should run somewhere that stays on. Reading public market data is not
 trading, so jurisdiction does not block hosting it; confirm the WebSocket is

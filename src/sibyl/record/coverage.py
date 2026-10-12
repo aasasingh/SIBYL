@@ -20,6 +20,8 @@ gives the per-asset truth.
 
 from __future__ import annotations
 
+import os
+import time
 import uuid
 from dataclasses import dataclass
 from datetime import UTC, datetime
@@ -37,12 +39,15 @@ COVERAGE_SCHEMA = pa.schema(
         ("connect_ts", pa.timestamp("us", tz="UTC")),
         ("disconnect_ts", pa.timestamp("us", tz="UTC")),
         ("duration_s", pa.float64()),
-        ("end_reason", pa.string()),  # refresh | error | shutdown | deadline
+        ("end_reason", pa.string()),  # refresh | error | shutdown | deadline | open
         ("end_detail", pa.string()),
         ("n_assets", pa.int64()),
         ("n_events", pa.int64()),
     ]
 )
+
+# A segment whose connection is up (or whose process died without closing it).
+OPEN = "open"
 
 
 @dataclass
@@ -56,11 +61,26 @@ class Segment:
 
 
 class CoverageWriter:
-    """One Parquet part per closed segment.
+    """One Parquet file per segment, rewritten in place as the segment lives.
 
-    Written on close rather than buffered, because the whole point is to
-    survive the process dying: a buffered coverage record would be the first
-    thing lost in exactly the crash it is meant to document.
+    A segment that is only written on close is lost in exactly the crash it
+    is meant to document: a hard kill, power loss or laptop sleep runs no
+    `finally`. So the file is written three ways:
+
+      * `mark_open` on connect -- `end_reason="open"`, zero length;
+      * `heartbeat` about every minute -- still "open", `disconnect_ts`
+        advanced to now;
+      * `close_segment` on a clean exit -- the real reason.
+
+    A segment still reading "open" after its session has died therefore
+    claims coverage only up to its last heartbeat. Callers flush event data
+    *before* each heartbeat, so the claimed interval is always backed by
+    rows on disk; the up-to-a-minute tail before the crash is reported as a
+    gap, which is the conservative direction.
+
+    Every write goes to a temp file then `os.replace`, so a crash mid-write
+    leaves the previous version intact rather than a truncated Parquet file
+    that would break every reader of the ledger.
     """
 
     def __init__(self, root: Path, session_id: str | None = None) -> None:
@@ -80,12 +100,28 @@ class CoverageWriter:
         self._next_segment += 1
         return segment
 
+    def mark_open(self, segment: Segment) -> None:
+        """Record that the connection is up, before any data is claimed."""
+        self._write(segment, end=segment.connect_ts, reason=OPEN)
+
+    def heartbeat(self, segment: Segment, *, n_events: int | None = None) -> None:
+        """Extend an open segment's claimed coverage to now.
+
+        Flush event data first: the heartbeat asserts that state up to this
+        instant is on disk.
+        """
+        if n_events is not None:
+            segment.n_events = n_events
+        self._write(segment, end=datetime.now(UTC), reason=OPEN)
+
     def close_segment(
         self, segment: Segment, *, reason: str, detail: str = "", n_events: int | None = None
     ) -> None:
-        disconnect = datetime.now(UTC)
         if n_events is not None:
             segment.n_events = n_events
+        self._write(segment, end=datetime.now(UTC), reason=reason, detail=detail)
+
+    def _write(self, segment: Segment, *, end: datetime, reason: str, detail: str = "") -> None:
         table = pa.Table.from_pylist(
             [
                 {
@@ -93,8 +129,8 @@ class CoverageWriter:
                     "segment_id": segment.segment_id,
                     "assets_version": segment.assets_version,
                     "connect_ts": segment.connect_ts,
-                    "disconnect_ts": disconnect,
-                    "duration_s": (disconnect - segment.connect_ts).total_seconds(),
+                    "disconnect_ts": end,
+                    "duration_s": (end - segment.connect_ts).total_seconds(),
                     "end_reason": reason,
                     "end_detail": detail[:500],
                     "n_assets": segment.n_assets,
@@ -104,7 +140,23 @@ class CoverageWriter:
             schema=COVERAGE_SCHEMA,
         )
         name = f"seg-{segment.session_id}-{segment.segment_id:06d}.parquet"
-        pq.write_table(table, self.dir / name)
+        # The temp suffix keeps it out of the `*.parquet` glob readers use.
+        tmp = self.dir / f"{name}.tmp"
+        pq.write_table(table, tmp)
+        _replace(tmp, self.dir / name)
+
+
+def _replace(src: Path, dst: Path, *, attempts: int = 5) -> None:
+    """`os.replace`, retried: on Windows it fails while a reader (e.g. a
+    concurrent `sibyl coverage`) holds the destination open."""
+    for i in range(attempts):
+        try:
+            os.replace(src, dst)
+            return
+        except PermissionError:
+            if i == attempts - 1:
+                raise
+            time.sleep(0.2 * (i + 1))
 
 
 def _connect(root: Path) -> duckdb.DuckDBPyConnection:
@@ -154,17 +206,21 @@ def coverage_summary(root: Path) -> dict[str, float | int]:
                    coalesce(sum(duration_s), 0) AS connected_s,
                    coalesce(sum(n_events), 0) AS events,
                    min(connect_ts) AS first_ts,
-                   max(disconnect_ts) AS last_ts
+                   max(disconnect_ts) AS last_ts,
+                   count(*) FILTER (WHERE end_reason = 'open') AS unclosed
             FROM coverage
             """
         ).fetchone()
     assert row is not None
-    segments, sessions, connected_s, events, first_ts, last_ts = row
+    segments, sessions, connected_s, events, first_ts, last_ts, unclosed = row
     gaps = find_gaps(root)
     wall = (last_ts - first_ts).total_seconds() if first_ts and last_ts else 0.0
     return {
         "segments": int(segments),
         "sessions": int(sessions),
+        # Segments never closed: the live one, plus one per hard crash. A
+        # crashed segment's coverage ends at its last heartbeat.
+        "unclosed": int(unclosed),
         "connected_s": float(connected_s),
         "events": int(events),
         "wall_s": float(wall),

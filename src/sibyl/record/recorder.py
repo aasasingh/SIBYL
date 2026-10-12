@@ -17,9 +17,12 @@ Three durability properties, each of which matters more than any statistic
 computed downstream:
 
   1. **Coverage is recorded, not assumed.** Every connection writes a segment
-     to the coverage ledger on close. The gaps between segments are where
-     book state was unknown, and the fill model must refuse to simulate
-     across them rather than interpolate. See `record/coverage.py`.
+     to the coverage ledger as soon as it is subscribed, extends it with a
+     heartbeat every `heartbeat_seconds`, and finalises it on close -- so a
+     hard crash or sleep loses at most the last heartbeat interval, not the
+     segment. The gaps between segments are where book state was unknown,
+     and the fill model must refuse to simulate across them rather than
+     interpolate. See `record/coverage.py`.
   2. **The subscription refreshes.** Markets are picked by liquidity at
      startup; within a week some have resolved and new liquid markets exist
      that a long-lived process would never watch. The asset set is
@@ -57,6 +60,7 @@ WS_URL = "wss://ws-subscriptions-clob.polymarket.com/ws/market"
 # silence as a dead connection well past the library's own ping interval.
 RECV_TIMEOUT_S = 90.0
 PING_INTERVAL_S = 20.0
+HEARTBEAT_S = 60.0
 
 
 @dataclass
@@ -191,6 +195,7 @@ async def record(
     flush_seconds: float = 60.0,
     log_every_s: float = 300.0,
     refresh_hours: float = 24.0,
+    heartbeat_seconds: float = HEARTBEAT_S,
 ) -> RecorderStats:
     """Subscribe and record until `hours` elapses (or forever if None).
 
@@ -247,10 +252,27 @@ async def record(
                         WS_URL, open_timeout=20, ping_interval=PING_INTERVAL_S
                     ) as ws:
                         await ws.send(json.dumps({"assets_ids": assets, "type": "market"}))
+                        coverage.mark_open(segment)
+                        last_beat = time.monotonic()
                         backoff = 1.0
                         while time.monotonic() < cycle_end:
+                            if time.monotonic() - last_beat >= heartbeat_seconds:
+                                # Flush first: the heartbeat claims coverage
+                                # up to now, so the data must already be on disk.
+                                writer.flush()
+                                last_flush = time.monotonic()
+                                coverage.heartbeat(segment, n_events=stats.events - events_at_open)
+                                last_beat = time.monotonic()
+                            # Wake for the next heartbeat even if the feed is silent.
+                            wait = max(
+                                0.0,
+                                min(
+                                    RECV_TIMEOUT_S,
+                                    heartbeat_seconds - (time.monotonic() - last_beat),
+                                ),
+                            )
                             try:
-                                raw = await asyncio.wait_for(ws.recv(), timeout=RECV_TIMEOUT_S)
+                                raw = await asyncio.wait_for(ws.recv(), timeout=wait)
                             except TimeoutError:
                                 # Silence is normal; the library's pings
                                 # police liveness. Flush and keep waiting.
