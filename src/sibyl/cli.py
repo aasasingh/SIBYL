@@ -451,13 +451,15 @@ def main() -> None:
     rec.add_argument(
         "--hours", type=float, default=None, help="stop after N hours (default: run until killed)"
     )
-    rec.add_argument("--markets", type=int, default=60, help="most-liquid active markets to watch")
+    rec.add_argument(
+        "--markets", type=int, default=60, help="most-traded (24h) mid-priced markets to watch"
+    )
     rec.add_argument("--max-assets", type=int, default=150, help="cap on subscribed token ids")
     rec.add_argument(
         "--refresh-hours",
         type=float,
-        default=24.0,
-        help="re-select the liquid market set this often (resolved markets drop out)",
+        default=6.0,
+        help="re-select the traded market set this often (resolved markets drop out)",
     )
 
     tbl = sub.add_parser(

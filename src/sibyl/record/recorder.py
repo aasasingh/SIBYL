@@ -23,10 +23,11 @@ computed downstream:
      segment. The gaps between segments are where book state was unknown,
      and the fill model must refuse to simulate across them rather than
      interpolate. See `record/coverage.py`.
-  2. **The subscription refreshes.** Markets are picked by liquidity at
-     startup; within a week some have resolved and new liquid markets exist
-     that a long-lived process would never watch. The asset set is
-     re-selected every `refresh_hours` and a new manifest written.
+  2. **The subscription refreshes.** Markets are picked by *current*
+     (24h) volume with a tradeable mid price -- see `choose_markets` for why
+     not lifetime volume. Active markets resolve fast (sports within hours),
+     so the asset set is re-selected every `refresh_hours` (default 6) and a
+     new manifest written.
   3. **Nothing is buffered across a crash for longer than `flush_seconds`.**
 
 The market channel delivers `book` (full ladder snapshot), `price_change`
@@ -42,6 +43,7 @@ import json
 import time
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
+from decimal import Decimal, InvalidOperation
 from pathlib import Path
 from typing import Any
 
@@ -73,24 +75,60 @@ class RecorderStats:
     by_type: dict[str, int] = field(default_factory=dict)
 
 
-async def select_assets(
-    client: PolymarketReadClient, *, n_markets: int = 60, max_assets: int = 150
-) -> tuple[list[str], list[dict[str, Any]]]:
-    """Pick liquid active markets and return their outcome-token ids.
+# Selection: where a maker could actually quote, and where trading happens now.
+#
+# The first recorder ranked by LIFETIME volume. Measured after 20h: 97.8% of
+# recorded trades were one bot buying 5 @ 0.002, only 6 of 60 markets had a
+# mid between 0.03 and 0.97, and most were long-dated longshots (2028
+# nomination markets). A fill model needs fills; that set produced almost
+# none. See research/fill-model-design.md.
+SELECTION_ORDER = "volume24hr"
+MID_RANGE = (Decimal("0.05"), Decimal("0.95"))
+MAX_PER_EVENT = 3
+CANDIDATE_PAGES = 5  # x100 candidates, ranked, before filtering
 
-    Both legs of each market are subscribed: the YES and NO books are two
-    views of one instrument and a fill model needs both sides.
+
+def _decimal(raw: Any) -> Decimal | None:
+    try:
+        return Decimal(str(raw)) if raw not in (None, "") else None
+    except InvalidOperation:
+        return None
+
+
+def choose_markets(
+    candidates: list[dict[str, Any]],
+    *,
+    n_markets: int = 60,
+    max_assets: int = 150,
+    mid_range: tuple[Decimal, Decimal] = MID_RANGE,
+    max_per_event: int = MAX_PER_EVENT,
+) -> tuple[list[str], list[dict[str, Any]]]:
+    """Filter ranked candidates down to a recordable set, preserving rank.
+
+    Kept: order book enabled and accepting orders, a two-sided quote with
+    mid inside `mid_range`, and at most `max_per_event` markets from any one
+    event, so a single NegRisk set (30 candidates of one election) cannot
+    fill every slot. Both legs of each market are subscribed: the YES and NO
+    books are two views of one instrument and a fill model needs both.
     """
-    markets = await client.markets(
-        active="true",
-        closed="false",
-        limit=n_markets,
-        order="volumeNum",
-        ascending="false",
-    )
     assets: list[str] = []
     manifest: list[dict[str, Any]] = []
-    for m in markets:
+    per_event: dict[str, int] = {}
+    for m in candidates:
+        if len(manifest) >= n_markets or len(assets) + 2 > max_assets:
+            break
+        if not (m.get("enableOrderBook") and m.get("acceptingOrders")):
+            continue
+        bid, ask = _decimal(m.get("bestBid")), _decimal(m.get("bestAsk"))
+        if bid is None or ask is None or bid <= 0 or ask >= 1 or ask <= bid:
+            continue
+        mid = (bid + ask) / 2
+        if not mid_range[0] <= mid <= mid_range[1]:
+            continue
+        events = m.get("events") or []
+        event_id = str(events[0].get("id")) if events else f"market:{m.get('id')}"
+        if per_event.get(event_id, 0) >= max_per_event:
+            continue
         raw = m.get("clobTokenIds")
         if not isinstance(raw, str):
             continue
@@ -100,20 +138,43 @@ async def select_assets(
             continue
         if len(tokens) != 2:
             continue
-        if len(assets) + 2 > max_assets:
-            break
+        per_event[event_id] = per_event.get(event_id, 0) + 1
         assets.extend(tokens)
         manifest.append(
             {
                 "market_id": str(m.get("id")),
                 "condition_id": str(m.get("conditionId") or ""),
+                "event_id": event_id,
                 "question": str(m.get("question") or ""),
                 "tokens": tokens,
                 "volume": str(m.get("volumeNum") or ""),
+                "volume24hr": str(m.get("volume24hr") or ""),
+                "best_bid": str(bid),
+                "best_ask": str(ask),
                 "end_date": str(m.get("endDate") or ""),
             }
         )
     return assets, manifest
+
+
+async def select_assets(
+    client: PolymarketReadClient, *, n_markets: int = 60, max_assets: int = 150
+) -> tuple[list[str], list[dict[str, Any]]]:
+    """Pick currently-traded, mid-priced active markets; return their token ids."""
+    candidates: list[dict[str, Any]] = []
+    for page in range(CANDIDATE_PAGES):
+        batch = await client.markets(
+            active="true",
+            closed="false",
+            limit=100,
+            offset=page * 100,
+            order=SELECTION_ORDER,
+            ascending="false",
+        )
+        candidates.extend(batch)
+        if len(batch) < 100:
+            break
+    return choose_markets(candidates, n_markets=n_markets, max_assets=max_assets)
 
 
 def _rows_from_message(raw: str, recv_ts: datetime) -> list[EventRow]:
@@ -176,6 +237,11 @@ def _write_manifest(
                 "session_id": session,
                 "assets_version": version,
                 "started": datetime.now(UTC).isoformat(),
+                "selection": {
+                    "order": SELECTION_ORDER,
+                    "mid_range": [str(MID_RANGE[0]), str(MID_RANGE[1])],
+                    "max_per_event": MAX_PER_EVENT,
+                },
                 "assets": assets,
                 "markets": manifest,
             },
@@ -194,7 +260,7 @@ async def record(
     flush_every: int = 2000,
     flush_seconds: float = 60.0,
     log_every_s: float = 300.0,
-    refresh_hours: float = 24.0,
+    refresh_hours: float = 6.0,
     heartbeat_seconds: float = HEARTBEAT_S,
 ) -> RecorderStats:
     """Subscribe and record until `hours` elapses (or forever if None).
