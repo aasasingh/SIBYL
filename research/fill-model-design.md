@@ -248,3 +248,46 @@ Reading it:
 Twenty minutes is a mechanics check, not a result. Step 4 (markouts) needs
 days of the new market set. Steps 4 and 5 need enough
 recorded history to contain real adverse-selection episodes — days, not hours.
+
+## Step 4 result: the markout harness, first look (2026-10-16)
+
+`sibyl markout` (`fill/markout.py`) runs the step-3 probes through every
+variant and marks each fill out against the reconstructed mid at +1m / +5m
+/ +1h, in cents per share, beside the per-fill rebate
+`0.0125 * p * (1 - p)` (the US schedule; on INTL the rebate is a pool share,
+so this is the generous reference). A horizon that crosses a coverage gap or
+the end of data is left unmarked, never filled in. Standard errors are
+clustered by market (both legs as one). Long recordings are replayed in
+3-hour chunks (~8 GB peak; ~4 min per chunk on this laptop).
+
+Building it exposed a step-3 bug, now fixed: an order that went live at the
+same instant as a book update was joined to the book *after* the update,
+so a crossing order arriving at that moment made the probe "unplaceable"
+instead of filling it.
+
+First look, ~9.5 h of the new market set (2026-10-12 19:08Z to 2026-10-13 03:54Z,
+plus 45 min on 2026-10-16), 21,262 placed probes, 250 ms latency.
+Net = markout + rebate, cents/share, 95% CI clustered by market:
+
+| variant | fill rate | net +1m | net +5m | net +1h |
+|---|---|---|---|---|
+| pessimistic | 13.3% | -0.65 [-0.88, -0.42] | -0.54 [-0.89, -0.19] | -0.28 [-1.08, 0.52] |
+| pro_rata | 14.2% | -0.53 [-0.74, -0.32] | -0.37 [-0.76, 0.03] | -0.19 [-0.88, 0.50] |
+| optimistic_queue | 14.7% | -0.44 [-0.64, -0.23] | -0.34 [-0.73, 0.05] | -0.20 [-0.77, 0.38] |
+| fill_on_touch | 29.3% | **+0.19 [0.06, 0.33]** | **+0.34 [0.11, 0.58]** | +0.25 [-0.09, 0.59] |
+
+Reading it:
+
+- **The naive rule shows a profit; every queue-aware rule shows a loss.**
+  This is the failure the design doc was written to prevent, now measured:
+  fill-on-touch turns adverse selection into apparent edge.
+- **The loss is concentrated in cross fills** (pessimistic, +5m: 1,994 of
+  2,806 fills, -1.03c markout). The size ahead vanished and an order
+  arrived at or through our price -- the market moving onto us. Queue fills,
+  the "earned" ones, were positive (+0.93c, 406 fills, CI wide).
+- **The rebate (~0.21c here) is smaller than the adverse move** at every
+  horizon under every honest rule.
+
+This is a first look, not the result: under ten hours, one evening's
+markets, and the +1h row rests on 43 markets. The result needs the full
+multi-day recording, rerun unchanged.

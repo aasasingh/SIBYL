@@ -204,6 +204,8 @@ class QueueSimulator:
         self._live.clear()
 
     def _on_snapshot(self, snap: BookSnapshot) -> None:
+        if snap.venue_ts > 0:
+            self._advance(snap.venue_ts)
         for s in self._live.get(snap.asset_id, []):
             book = snap.bids if s.order.side == "bid" else snap.asks
             assert s.price is not None
@@ -220,6 +222,13 @@ class QueueSimulator:
         return a.traded, ambiguous
 
     def _on_change(self, change: LevelChange, before: Decimal, frame: ChangeFrame) -> None:
+        if self._pending and self._pending[-1].order.place_ts + self.latency_ms <= frame.venue_ts:
+            # Orders that went live before this update must join the book as
+            # it was, then see the update like any other live order.
+            ladder = self.replayer.ladders[change.asset_id]
+            ladder.set_level(change.side, change.price, before)
+            self._advance(frame.venue_ts)
+            ladder.set_level(change.side, change.price, change.size)
         self._advance(frame.venue_ts)
         live = self._live.get(change.asset_id)
         if not live:

@@ -262,11 +262,16 @@ def simulate_recorded(
     variants: dict[str, dict[str, Any]] | None = None,
     start: datetime | None = None,
     end: datetime | None = None,
+    replayer: Replayer | None = None,
 ) -> dict[str, list[OrderState]]:
-    """Attribute, then replay once with one simulator per variant attached."""
+    """Attribute, then replay once with one simulator per variant attached.
+
+    Pass a `replayer` to attach other listeners (the markout mid tracker).
+    """
     attributed, _, _ = attribute_recorded(root, start=start, end=end)
     index = attribution_index(attributed)
-    replayer = Replayer()
+    del attributed
+    replayer = replayer or Replayer()
     sims = {
         name: QueueSimulator(replayer, orders, index, latency_ms=latency_ms, **kwargs)
         for name, kwargs in (variants or VARIANTS).items()

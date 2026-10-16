@@ -378,6 +378,58 @@ def _probe(args: argparse.Namespace) -> int:
     return 0
 
 
+def _markout(args: argparse.Namespace) -> int:
+    """Mark out every simulated probe fill at each horizon, per fill-rule variant."""
+    import json
+    from datetime import datetime
+
+    from sibyl.fill.markout import HORIZONS_S, markout_recorded, summarise_markouts
+    from sibyl.fill.queue import summarise
+
+    start = datetime.fromisoformat(args.start) if args.start else None
+    end = datetime.fromisoformat(args.end) if args.end else None
+    results = markout_recorded(
+        args.data_dir,
+        start=start,
+        end=end,
+        every_s=args.every_s,
+        life_s=args.life_s,
+        latency_ms=args.latency_ms,
+        chunk_h=args.chunk_h,
+    )
+    if not results:
+        log.error("markout.no_data")
+        return 1
+    variants: dict[str, object] = {}
+    for name, r in results.items():
+        marks = r.marks
+        variant: dict[str, object] = {
+            "fills": summarise(r.states).as_dict(),
+            "unmarked": r.unmarked,
+        }
+        for label, rows in (
+            ("all", marks),
+            ("unambiguous", [m for m in marks if not m.fill.ambiguous]),
+        ):
+            for h in HORIZONS_S:
+                s = summarise_markouts(rows, h)
+                if s is None:
+                    continue
+                variant[f"{label}_{h}s"] = s.as_dict()
+                log.info("markout.summary", variant=name, subset=label, **s.as_dict())
+        kinds = sorted({m.fill.kind for m in marks})
+        for kind in kinds:
+            s = summarise_markouts([m for m in marks if m.fill.kind == kind], 300)
+            if s is not None:
+                variant[f"kind_{kind}_300s"] = s.as_dict()
+                log.info("markout.by_kind", variant=name, kind=kind, **s.as_dict())
+        variants[name] = variant
+    report = {"latency_ms": args.latency_ms, "start": args.start, "variants": variants}
+    if args.json_out:
+        args.json_out.write_text(json.dumps(report, indent=2, default=str), encoding="utf-8")
+    return 0
+
+
 def _compact(args: argparse.Namespace) -> int:
     merged = Ledger(args.data_dir).compact(min_parts=args.min_parts)
     log.info("store.compacted", **merged)
@@ -531,6 +583,22 @@ def main() -> None:
         "--latency-ms", type=int, default=250, help="assumed order latency (place and cancel)"
     )
 
+    mko = sub.add_parser(
+        "markout", help="price moves after each simulated probe fill, vs the maker rebate"
+    )
+    mko.add_argument("--data-dir", type=Path, default=DEFAULT_DATA_DIR)
+    mko.add_argument("--start", default=None, help="ISO time; only replay data received after it")
+    mko.add_argument("--end", default=None, help="ISO time; only replay data received before it")
+    mko.add_argument("--every-s", type=float, default=300.0, help="probe cadence per book side")
+    mko.add_argument("--life-s", type=float, default=300.0, help="how long each probe rests")
+    mko.add_argument(
+        "--latency-ms", type=int, default=250, help="assumed order latency (place and cancel)"
+    )
+    mko.add_argument(
+        "--chunk-h", type=float, default=3.0, help="replay this many hours at a time (memory)"
+    )
+    mko.add_argument("--json-out", type=Path, default=None, help="write the full report here")
+
     args = parser.parse_args()
     configure_logging(json_output=args.json)
     if args.command == "status":
@@ -555,6 +623,8 @@ def main() -> None:
         sys.exit(_coverage(args))
     elif args.command == "probe":
         sys.exit(_probe(args))
+    elif args.command == "markout":
+        sys.exit(_markout(args))
     elif args.command == "attribute":
         sys.exit(_attribute(args))
     elif args.command == "replay":
